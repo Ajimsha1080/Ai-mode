@@ -33,10 +33,19 @@ async function main() {
     }
   }
 
-  // Ensure test environment variables with strong secrets
+  // Ensure test environment variables with strong secrets and RS256 keypair
+  const crypto = await import('crypto');
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' }
+  });
+  process.env.SERVICE_JWT_PRIVATE_KEY = privateKey;
+  process.env.SERVICE_JWT_PUBLIC_KEY = publicKey;
   process.env.SESSION_JWT_SECRET = 'super_secure_production_session_jwt_secret_987654321_aaas';
   process.env.SERVICE_JWT_SECRET = 'super_secure_production_service_jwt_secret_123456789_aaas';
   process.env.INTERNAL_SERVICE_SECRET = process.env.SERVICE_JWT_SECRET;
+  process.env.ENCRYPTION_KEY = 'production_encryption_key_enterprise_grade_32bytes_min!';
 
   // --------------------------------------------------------------------------
   // CRITERION 1: Secret & Token Validation

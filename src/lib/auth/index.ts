@@ -1,8 +1,9 @@
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
-import { SignJWT, jwtVerify } from 'jose';
+import fs from 'fs';
+import path from 'path';
+import { SignJWT, jwtVerify, importPKCS8, importSPKI, KeyLike } from 'jose';
 import { db } from '../db';
-import { seedDatabaseIfEmpty } from '../db/seed';
 import { User, WorkspaceRole } from '@/types';
 
 export const AUTH_COOKIE_NAME = process.env.AUTH_COOKIE_NAME || 'aaas_session_token';
@@ -15,7 +16,10 @@ export const DISALLOWED_DEFAULT_SECRETS = [
   'password',
   'test',
   'admin',
-  '12345678901234567890123456789012'
+  '12345678901234567890123456789012',
+  'aaas_live_production_jwt_service_secret_2026_secure_key!',
+  'aaas_live_production_jwt_session_secret_2026_secure_key!',
+  'aaas_live_production_aes_256_encryption_master_key_2026!'
 ];
 
 export function validateSecretStrength(secret: string | undefined, name: string): string {
@@ -31,13 +35,12 @@ export function validateSecretStrength(secret: string | undefined, name: string)
   return secret;
 }
 
-// Session JWT Secret for End-User App Sessions
+// Session JWT Secret for End-User App Sessions (Symmetric HS256)
 export function getSessionJwtSecret(): Uint8Array {
-  const appEnv = process.env.APP_ENV || process.env.NODE_ENV;
+  const appEnv = (process.env.APP_ENV || process.env.NODE_ENV || '').toLowerCase();
   const raw = process.env.SESSION_JWT_SECRET || process.env.JWT_SECRET;
   if (!raw) {
-    if (appEnv === 'development') {
-      // Strict default strictly for local development testing with 32+ bytes
+    if (appEnv === 'development' || appEnv === 'dev') {
       return new TextEncoder().encode('development_only_session_secret_32bytes_long!');
     }
     throw new Error(
@@ -48,25 +51,115 @@ export function getSessionJwtSecret(): Uint8Array {
   return new TextEncoder().encode(raw);
 }
 
-// Service-to-Service JWT Secret for Node <-> Python Backend Communication
-export function getServiceJwtSecret(): Uint8Array {
-  const appEnv = process.env.APP_ENV || process.env.NODE_ENV;
-  const raw = process.env.SERVICE_JWT_SECRET || process.env.INTERNAL_SERVICE_SECRET || process.env.JWT_SECRET;
-  if (!raw) {
-    if (appEnv === 'development') {
-      return new TextEncoder().encode('development_only_service_secret_32bytes_long!');
-    }
-    throw new Error(
-      'Security Error: SERVICE_JWT_SECRET is missing. Explicit APP_ENV=development is required to use local fallback secrets.'
-    );
+// Asymmetric Key Pair Storage for Dev Fallback
+let devKeyPair: { privateKeyPem: string; publicKeyPem: string } | null = null;
+let cachedPrivateKey: KeyLike | null = null;
+let cachedPublicKey: KeyLike | null = null;
+
+function normalizePemKey(rawKey: string): string {
+  let clean = rawKey.trim();
+  // Check if it's base64 encoded
+  if (!clean.includes('-----BEGIN') && clean.length > 64) {
+    try {
+      const decoded = Buffer.from(clean, 'base64').toString('utf-8');
+      if (decoded.includes('-----BEGIN')) {
+        clean = decoded.trim();
+      }
+    } catch {}
   }
-  validateSecretStrength(raw, 'SERVICE_JWT_SECRET');
-  return new TextEncoder().encode(raw);
+  // Convert literal '\n' characters to real newlines if passed in env
+  return clean.replace(/\\n/g, '\n');
 }
 
-export function validateBootSecrets(): void {
+function getDevKeyPair(): { privateKeyPem: string; publicKeyPem: string } {
+  if (devKeyPair) return devKeyPair;
+
+  const devKeyDir = path.resolve(process.cwd(), 'data', '.keys');
+  const privPath = path.join(devKeyDir, 'service_rs256_private.pem');
+  const pubPath = path.join(devKeyDir, 'service_rs256_public.pem');
+
+  if (fs.existsSync(privPath) && fs.existsSync(pubPath)) {
+    try {
+      devKeyPair = {
+        privateKeyPem: fs.readFileSync(privPath, 'utf-8'),
+        publicKeyPem: fs.readFileSync(pubPath, 'utf-8')
+      };
+      return devKeyPair;
+    } catch {}
+  }
+
+  // Generate new 2048-bit RSA keypair for local development
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' }
+  });
+
+  try {
+    fs.mkdirSync(devKeyDir, { recursive: true });
+    fs.writeFileSync(privPath, privateKey, 'utf-8');
+    fs.writeFileSync(pubPath, publicKey, 'utf-8');
+  } catch {}
+
+  devKeyPair = { privateKeyPem: privateKey, publicKeyPem: publicKey };
+  return devKeyPair;
+}
+
+export async function getServicePrivateKey(): Promise<KeyLike> {
+  if (cachedPrivateKey) return cachedPrivateKey;
+
+  const appEnv = (process.env.APP_ENV || process.env.NODE_ENV || '').toLowerCase();
+  let raw = process.env.SERVICE_JWT_PRIVATE_KEY || process.env.SERVICE_JWT_PRIVATE_KEY_PEM;
+
+  if (raw && fs.existsSync(raw)) {
+    raw = fs.readFileSync(raw, 'utf-8');
+  }
+
+  if (!raw) {
+    if (appEnv === 'development' || appEnv === 'dev') {
+      const devKeys = getDevKeyPair();
+      raw = devKeys.privateKeyPem;
+    } else {
+      throw new Error(
+        'Security Error: SERVICE_JWT_PRIVATE_KEY is missing. An asymmetric RS256/EdDSA private key is required in production.'
+      );
+    }
+  }
+
+  const pem = normalizePemKey(raw);
+  cachedPrivateKey = await importPKCS8(pem, 'RS256');
+  return cachedPrivateKey;
+}
+
+export async function getServicePublicKey(): Promise<KeyLike> {
+  if (cachedPublicKey) return cachedPublicKey;
+
+  const appEnv = (process.env.APP_ENV || process.env.NODE_ENV || '').toLowerCase();
+  let raw = process.env.SERVICE_JWT_PUBLIC_KEY || process.env.SERVICE_JWT_PUBLIC_KEY_PEM;
+
+  if (raw && fs.existsSync(raw)) {
+    raw = fs.readFileSync(raw, 'utf-8');
+  }
+
+  if (!raw) {
+    if (appEnv === 'development' || appEnv === 'dev') {
+      const devKeys = getDevKeyPair();
+      raw = devKeys.publicKeyPem;
+    } else {
+      throw new Error(
+        'Security Error: SERVICE_JWT_PUBLIC_KEY is missing. An asymmetric RS256/EdDSA public key is required.'
+      );
+    }
+  }
+
+  const pem = normalizePemKey(raw);
+  cachedPublicKey = await importSPKI(pem, 'RS256');
+  return cachedPublicKey;
+}
+
+export async function validateBootSecrets(): Promise<void> {
   getSessionJwtSecret();
-  getServiceJwtSecret();
+  await getServicePrivateKey();
   const { getEncryptionKey } = require('../crypto/encryption');
   getEncryptionKey();
 }
@@ -147,12 +240,16 @@ export async function createSessionToken(payload: {
     .sign(secret);
 }
 
+/**
+ * Creates an Asymmetrically Signed Service JWT (RS256)
+ * Next.js signs with private key; FastAPI verifies with public key.
+ */
 export async function createServiceJwt(
   workspaceId: string,
   userId: string = 'service_node',
   role: string = 'ADMIN'
 ): Promise<string> {
-  const secret = getServiceJwtSecret();
+  const privateKey = await getServicePrivateKey();
   return new SignJWT({
     workspace_id: workspaceId,
     workspaceId: workspaceId,
@@ -161,12 +258,12 @@ export async function createServiceJwt(
     role: role,
     isSuperAdmin: role === 'SUPERADMIN'
   })
-    .setProtectedHeader({ alg: 'HS256' })
+    .setProtectedHeader({ alg: 'RS256' })
     .setIssuer('aaas-node')
     .setAudience('aaas-python')
     .setIssuedAt()
     .setExpirationTime('15m')
-    .sign(secret);
+    .sign(privateKey);
 }
 
 export async function verifySessionToken(token: string): Promise<{
@@ -195,8 +292,8 @@ export async function verifyServiceJwt(token: string): Promise<{
   isSuperAdmin?: boolean;
 } | null> {
   try {
-    const secret = getServiceJwtSecret();
-    const { payload } = await jwtVerify(token, secret, {
+    const publicKey = await getServicePublicKey();
+    const { payload } = await jwtVerify(token, publicKey, {
       issuer: 'aaas-node',
       audience: 'aaas-python',
       clockTolerance: 60

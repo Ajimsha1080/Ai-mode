@@ -181,6 +181,14 @@ export async function seedDatabaseIfEmpty(force: boolean = false): Promise<void>
     db.tools.push(...STANDARD_TOOLS);
   }
 
+  const appEnv = (process.env.APP_ENV || process.env.NODE_ENV || '').toLowerCase();
+  const isDev = appEnv === 'dev' || appEnv === 'development';
+
+  if (!isDev && !force) {
+    // In production, never seed hardcoded demo accounts with default credentials
+    return;
+  }
+
   if (db.users.length > 0 && !force) {
     return;
   }
@@ -206,7 +214,7 @@ export async function seedDatabaseIfEmpty(force: boolean = false): Promise<void>
     db.api_keys.length = 0;
   }
 
-  console.log('Seeding initial enterprise demo data...');
+  console.log('Seeding initial enterprise demo data (dev environment)...');
 
   const passwordHash = await bcrypt.hash('password123', 10);
   const adminHash = await bcrypt.hash('admin123', 10);

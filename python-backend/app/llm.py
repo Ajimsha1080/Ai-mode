@@ -323,8 +323,10 @@ class LLMClient:
 
         # 5. Inventory check pattern
         elif any(w in lower for w in ["in stock", "available", "inventory", "units"]):
-            prod_id = "prod_01"
+            prod_id = "prod_02"
             if "jacket" in lower:
+                prod_id = "prod_01"
+            elif "tee" in lower or "shirt" in lower:
                 prod_id = "prod_02"
             elif "flask" in lower or "bottle" in lower:
                 prod_id = "prod_03"

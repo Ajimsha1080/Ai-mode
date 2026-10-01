@@ -142,14 +142,14 @@ The agent dynamically determines customer intent without brittle hardcoding:
 - Python 3.12+ (optional for local FastAPI service)
 
 ### 1. Environment Configuration
-Create a `.env` file in the root directory:
+Create a `.env` file in the root directory (see `.env.example` for all required variables):
 
 ```env
 APP_ENV=development
 NODE_ENV=development
 
 # LLM Configuration (Sarvam AI / OpenAI / Anthropic / Ollama)
-SARVAM_API_KEY=sk_wgtub61j_eyGlu73IXjWpozVC6e4JG5N5
+SARVAM_API_KEY=your_sarvam_api_key_here
 LLM_PROVIDER=sarvam
 LLM_MODEL=sarvam-105b-conversations
 
@@ -157,10 +157,12 @@ LLM_MODEL=sarvam-105b-conversations
 PYTHON_BACKEND_URL=http://127.0.0.1:8000
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 
-# Security Secrets (32+ chars)
-JWT_SECRET=your_super_secret_jwt_key_at_least_32_chars_long
+# Security Secrets (32+ chars - generate with bash scripts/gen-secrets.sh)
+SESSION_JWT_SECRET=your_session_secret_at_least_32_chars_long
 ENCRYPTION_KEY=your_encryption_key_at_least_32_chars_long
 ```
+
+> **Note on Demo Accounts:** Demo merchant and admin accounts are only seeded automatically when `APP_ENV=dev` or `APP_ENV=development`. In production (`APP_ENV=production`), the application starts cleanly without default credentials.
 
 ### 2. Install Dependencies & Run
 ```bash

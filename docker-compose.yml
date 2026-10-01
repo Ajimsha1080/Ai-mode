@@ -13,7 +13,8 @@ services:
         required: false
     environment:
       - PORT=8000
-      - SERVICE_JWT_SECRET=${SERVICE_JWT_SECRET:-aaas_live_production_jwt_service_secret_2026_secure_key!}
+      - APP_ENV=${APP_ENV:-production}
+      - SERVICE_JWT_PUBLIC_KEY=${SERVICE_JWT_PUBLIC_KEY}
       - SARVAM_API_KEY=${SARVAM_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
@@ -35,11 +36,12 @@ services:
         required: false
     environment:
       - NODE_ENV=production
+      - APP_ENV=${APP_ENV:-production}
       - PORT=3000
       - PYTHON_BACKEND_URL=http://python-backend:8000
-      - SESSION_JWT_SECRET=${SESSION_JWT_SECRET:-aaas_live_production_jwt_session_secret_2026_secure_key!}
-      - SERVICE_JWT_SECRET=${SERVICE_JWT_SECRET:-aaas_live_production_jwt_service_secret_2026_secure_key!}
-      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-aaas_live_production_aes_256_encryption_master_key_2026!}
+      - SESSION_JWT_SECRET=${SESSION_JWT_SECRET}
+      - SERVICE_JWT_PRIVATE_KEY=${SERVICE_JWT_PRIVATE_KEY}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - SARVAM_API_KEY=${SARVAM_API_KEY:-}
       - LLM_PROVIDER=${LLM_PROVIDER:-sarvam}
       - LLM_MODEL=${LLM_MODEL:-sarvam-105b-conversations}

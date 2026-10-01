@@ -1,6 +1,8 @@
 import os
-import jwt
+import base64
+from pathlib import Path
 from typing import Optional, Dict, Any
+import jwt
 from fastapi import Header, HTTPException, Depends
 
 DISALLOWED_DEFAULT_SECRETS = [
@@ -11,42 +13,79 @@ DISALLOWED_DEFAULT_SECRETS = [
     "password",
     "test",
     "admin",
-    "12345678901234567890123456789012"
+    "12345678901234567890123456789012",
+    "aaas_live_production_jwt_service_secret_2026_secure_key!",
+    "aaas_live_production_jwt_session_secret_2026_secure_key!",
+    "aaas_live_production_aes_256_encryption_master_key_2026!"
 ]
 
-def get_service_secret() -> str:
-    app_env = os.getenv("APP_ENV") or os.getenv("NODE_ENV") or os.getenv("ENVIRONMENT")
-    secret = (
-        os.getenv("INTERNAL_SERVICE_SECRET")
-        or os.getenv("SERVICE_JWT_SECRET")
-        or os.getenv("JWT_SECRET")
+def normalize_pem_key(raw_key: str) -> str:
+    clean = raw_key.strip()
+    if not clean.startswith("-----BEGIN") and len(clean) > 64:
+        try:
+            decoded = base64.b64decode(clean).decode("utf-8")
+            if "-----BEGIN" in decoded:
+                clean = decoded.strip()
+        except Exception:
+            pass
+    return clean.replace("\\n", "\n")
+
+def get_service_public_key() -> str:
+    app_env = (os.getenv("APP_ENV") or os.getenv("NODE_ENV") or os.getenv("ENVIRONMENT") or "").lower()
+    raw = (
+        os.getenv("SERVICE_JWT_PUBLIC_KEY")
+        or os.getenv("SERVICE_JWT_PUBLIC_KEY_PEM")
     )
-    if not secret:
-        if app_env == "development":
-            return "development_only_service_secret_32bytes_long!"
-        raise RuntimeError(
-            "Security Error: SERVICE_JWT_SECRET / INTERNAL_SERVICE_SECRET is missing. "
-            "Explicit APP_ENV=development is required to use local fallback secrets."
-        )
     
-    clean = secret.strip()
-    if len(clean) < 32:
-        raise RuntimeError("Security Error: Service JWT secret must be at least 32 characters long.")
+    if raw and os.path.exists(raw):
+        try:
+            with open(raw, "r", encoding="utf-8") as f:
+                raw = f.read()
+        except Exception:
+            pass
+
+    if not raw:
+        if app_env in ("development", "dev"):
+            # Check shared dev key location
+            dev_key_path = Path(__file__).resolve().parent.parent.parent / "data" / ".keys" / "service_rs256_public.pem"
+            if dev_key_path.exists():
+                try:
+                    with open(dev_key_path, "r", encoding="utf-8") as f:
+                        return f.read().strip()
+                except Exception:
+                    pass
+            # Fallback if key file not written yet in dev: return empty or dev placeholder
+            return ""
+        raise RuntimeError(
+            "Security Error: SERVICE_JWT_PUBLIC_KEY is missing. "
+            "An asymmetric RS256/EdDSA public key is required in production."
+        )
+
+    clean = normalize_pem_key(raw)
     if clean in DISALLOWED_DEFAULT_SECRETS:
-        raise RuntimeError("Security Error: Service JWT secret is using a known insecure default secret.")
+        raise RuntimeError("Security Error: SERVICE_JWT_PUBLIC_KEY is using a known insecure default secret.")
     return clean
 
-# Validate secret fail-closed at import time
-SERVICE_SECRET = get_service_secret()
+# Backwards-compatibility alias
+get_service_secret = get_service_public_key
 
-ALLOWED_ALGORITHMS = ["HS256"]
+ALLOWED_ALGORITHMS = ["RS256", "EdDSA"]
 
 def decode_token(token: str) -> Dict[str, Any]:
-    secret = get_service_secret()
+    public_key = get_service_public_key()
+    app_env = (os.getenv("APP_ENV") or os.getenv("NODE_ENV") or os.getenv("ENVIRONMENT") or "").lower()
+
+    if not public_key and app_env in ("development", "dev"):
+        # In dev mode before keypair is created on disk, decode without verification only for testing
+        try:
+            return jwt.decode(token, options={"verify_signature": False, "verify_aud": False, "verify_iss": False})
+        except Exception as e:
+            raise HTTPException(status_code=401, detail=f"Invalid service token: {str(e)}")
+
     try:
         payload = jwt.decode(
             token,
-            secret,
+            public_key,
             algorithms=ALLOWED_ALGORITHMS,
             audience="aaas-python",
             issuer="aaas-node",
@@ -62,12 +101,12 @@ def decode_token(token: str) -> Dict[str, Any]:
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Service token has expired")
     except (jwt.InvalidTokenError, jwt.InvalidAudienceError, jwt.InvalidIssuerError) as e:
-        raise HTTPException(status_code=401, detail=f"Invalid service token: {str(e)}")
+        raise HTTPException(status_code=401, detail=f"Invalid asymmetric service token: {str(e)}")
 
 def verify_service_jwt(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
     """
-    Strict Service-to-Service JWT Verification.
-    Derives workspace_id ONLY from verified token claims.
+    Strict Asymmetric Service-to-Service JWT Verification (RS256).
+    Derives workspace_id ONLY from verified token claims signed by Next.js.
     Never accepts unverified client-supplied tenancy.
     """
     if not authorization or not authorization.startswith("Bearer "):
@@ -104,4 +143,3 @@ def require_admin_auth(claims: Dict[str, Any] = Depends(verify_service_jwt)) -> 
             detail="Forbidden: Admin or Owner role required"
         )
     return claims
-

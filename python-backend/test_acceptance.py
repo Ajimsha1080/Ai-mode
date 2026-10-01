@@ -3,14 +3,26 @@ import sys
 import jwt
 import asyncio
 import unittest
+import time
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives import serialization
 
-# Set valid production-grade secrets for test execution
-VALID_SERVICE_SECRET = "super_secure_production_service_jwt_secret_123456789_aaas"
-os.environ["INTERNAL_SERVICE_SECRET"] = VALID_SERVICE_SECRET
-os.environ["SERVICE_JWT_SECRET"] = VALID_SERVICE_SECRET
+# Generate RS256 test keypair
+test_private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+TEST_PRIVATE_PEM = test_private_key.private_bytes(
+    encoding=serialization.Encoding.PEM,
+    format=serialization.PrivateFormat.PKCS8,
+    encryption_algorithm=serialization.NoEncryption()
+).decode("utf-8")
+TEST_PUBLIC_PEM = test_private_key.public_key().public_bytes(
+    encoding=serialization.Encoding.PEM,
+    format=serialization.PublicFormat.SubjectPublicKeyInfo
+).decode("utf-8")
+
+os.environ["SERVICE_JWT_PUBLIC_KEY"] = TEST_PUBLIC_PEM
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./test_acceptance.db"
 
-from app.auth import decode_token, verify_service_jwt, get_service_secret, DISALLOWED_DEFAULT_SECRETS
+from app.auth import decode_token, verify_service_jwt, get_service_public_key, DISALLOWED_DEFAULT_SECRETS
 from app.tools import lookup_order, _fetch_order_db
 from app.rag import execute_rag_pipeline
 from app.db.database import init_db
@@ -19,23 +31,22 @@ from fastapi import HTTPException
 class TestAcceptanceHardening(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        os.environ["SERVICE_JWT_PUBLIC_KEY"] = TEST_PUBLIC_PEM
         asyncio.run(init_db())
 
-    def test_01_service_secret_strength_validation(self):
-        """Service secret rejects missing, short, or known insecure strings."""
-        old_env = os.environ.get("INTERNAL_SERVICE_SECRET")
-        try:
-            # Short secret
-            os.environ["INTERNAL_SERVICE_SECRET"] = "too_short"
-            with self.assertRaises(RuntimeError):
-                get_service_secret()
+    def setUp(self):
+        os.environ["SERVICE_JWT_PUBLIC_KEY"] = TEST_PUBLIC_PEM
 
+    def test_01_service_secret_strength_validation(self):
+        """Service public key rejects known insecure default strings."""
+        old_env = os.environ.get("SERVICE_JWT_PUBLIC_KEY")
+        try:
             # Disallowed repo default secret
-            os.environ["INTERNAL_SERVICE_SECRET"] = DISALLOWED_DEFAULT_SECRETS[0]
+            os.environ["SERVICE_JWT_PUBLIC_KEY"] = DISALLOWED_DEFAULT_SECRETS[0]
             with self.assertRaises(RuntimeError):
-                get_service_secret()
+                get_service_public_key()
         finally:
-            os.environ["INTERNAL_SERVICE_SECRET"] = old_env
+            os.environ["SERVICE_JWT_PUBLIC_KEY"] = old_env
 
     def test_02_old_default_token_rejected_with_401(self):
         """Tokens signed with old default secret string are rejected with 401."""
@@ -50,8 +61,7 @@ class TestAcceptanceHardening(unittest.TestCase):
         self.assertEqual(ctx.exception.status_code, 401)
 
     def test_03_valid_service_jwt_verification(self):
-        """Valid service JWT with iss:aaas-node, aud:aaas-python, exp succeeds."""
-        import time
+        """Valid asymmetric service JWT with iss:aaas-node, aud:aaas-python, exp succeeds."""
         token = jwt.encode(
             {
                 "workspace_id": "ws_acme_corp",
@@ -61,8 +71,8 @@ class TestAcceptanceHardening(unittest.TestCase):
                 "aud": "aaas-python",
                 "exp": int(time.time()) + 3600
             },
-            VALID_SERVICE_SECRET,
-            algorithm="HS256"
+            TEST_PRIVATE_PEM,
+            algorithm="RS256"
         )
         claims = verify_service_jwt(f"Bearer {token}")
         self.assertEqual(claims["workspace_id"], "ws_acme_corp")
@@ -70,7 +80,6 @@ class TestAcceptanceHardening(unittest.TestCase):
 
     def test_04_service_jwt_rejects_wrong_audience_or_issuer(self):
         """Service JWT rejects invalid audience or issuer with 401."""
-        import time
         token = jwt.encode(
             {
                 "workspace_id": "ws_acme_corp",
@@ -79,8 +88,8 @@ class TestAcceptanceHardening(unittest.TestCase):
                 "aud": "wrong-audience",
                 "exp": int(time.time()) + 3600
             },
-            VALID_SERVICE_SECRET,
-            algorithm="HS256"
+            TEST_PRIVATE_PEM,
+            algorithm="RS256"
         )
         with self.assertRaises(HTTPException) as ctx:
             verify_service_jwt(f"Bearer {token}")
@@ -108,8 +117,24 @@ class TestAcceptanceHardening(unittest.TestCase):
             workspace_id="ws_empty_tenant",
             tenant_chunks=[]
         )
-        self.assertEqual(len(res.get("citations", [])), 0)
+        self.assertEqual(len(res["citations"]), 0)
         self.assertIn("do not have", res["natural_answer"].lower())
 
+    def test_07_valid_tenant_rag_returns_grounded_citations(self):
+        """Valid tenant chunks return grounded citations."""
+        res = execute_rag_pipeline(
+            question="What is your return policy?",
+            workspace_id="ws_acme_corp",
+            tenant_chunks=[{
+                "chunk_id": "chk_01",
+                "workspace_id": "ws_acme_corp",
+                "doc_name": "Return Policy",
+                "content": "Customers may return unworn items with tags within 30 days of delivery.",
+                "embedding": [0.1] * 128
+            }]
+        )
+        self.assertGreater(len(res["citations"]), 0)
+        self.assertTrue(res["grounding_verification"]["is_grounded"])
+
 if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    unittest.main()

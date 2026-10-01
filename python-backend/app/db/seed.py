@@ -39,8 +39,14 @@ def generate_embedding_128(text: str):
     return embedding
 
 async def seed_database_if_empty(session: AsyncSession):
-    """Checks if database has ws_acme_corp; if not, seeds standard multi-tenant datasets."""
-    stmt = select(WorkspaceModel).where(WorkspaceModel.id == "ws_acme_corp")
+    """Checks if database has ws_acme_corp; if not, seeds standard multi-tenant datasets in dev mode."""
+    import os
+    app_env = (os.getenv("APP_ENV") or os.getenv("ENVIRONMENT") or "").lower()
+    if app_env not in ("dev", "development"):
+        # Never seed demo stores or users in production
+        return
+
+    stmt = select(ProductModel).where(ProductModel.workspace_id == "ws_acme_corp")
     res = await session.execute(stmt)
     if res.scalars().first():
         return
