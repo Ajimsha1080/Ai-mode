@@ -1,10 +1,11 @@
-import sys
 import os
+import sys
 import time
+
 import jwt
-from starlette.testclient import TestClient
-from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from starlette.testclient import TestClient
 
 # Generate RS256 test keypair
 test_private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -25,6 +26,7 @@ os.environ["APP_ENV"] = "development"
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__))))
 
 from app.main import app
+
 
 def generate_token(workspace_id: str, role: str = "ADMIN") -> str:
     payload = {

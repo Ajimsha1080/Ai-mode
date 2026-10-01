@@ -1,11 +1,10 @@
-import os
 import json
-import re
 import logging
-import urllib.request
+import os
+import re
 import urllib.error
-from typing import List, Dict, Any, Optional
-from .tools import TOOL_DEFINITIONS, execute_typed_tool
+import urllib.request
+from typing import Any
 
 logger = logging.getLogger("shopmate_llm")
 logging.basicConfig(level=logging.INFO)
@@ -47,10 +46,10 @@ class LLMClient:
 
     def call_model(
         self,
-        messages: List[Dict[str, str]],
-        tools: List[Dict[str, Any]],
+        messages: list[dict[str, str]],
+        tools: list[dict[str, Any]],
         system_prompt: str = SYSTEM_INJECTION_DEFENSE_PROMPT
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Executes a model call against Sarvam AI, OpenAI, Anthropic, Ollama, or falls back to
         deterministic reasoning if in development mode. Includes exponential backoff retries and cascading fallbacks.
@@ -58,7 +57,7 @@ class LLMClient:
         import time
 
         def try_with_retry(fn, name: str, max_retries: int = 2):
-            last_ex = None
+            last_ex: Exception = RuntimeError(f"All retries failed for {name}")
             for attempt in range(max_retries + 1):
                 try:
                     return fn()
@@ -107,7 +106,7 @@ class LLMClient:
         logger.info("Using deterministic fallback engine for development mode.")
         return self._deterministic_fallback(messages, tools)
 
-    def _call_sarvam(self, messages: List[Dict[str, str]], tools: List[Dict[str, Any]], system_prompt: str) -> Dict[str, Any]:
+    def _call_sarvam(self, messages: list[dict[str, str]], tools: list[dict[str, Any]], system_prompt: str) -> dict[str, Any]:
         model = self.default_model or os.getenv("SARVAM_MODEL", "sarvam-105b-conversations")
         formatted_messages = [{"role": "system", "content": system_prompt}] + messages
         payload = {"model": model, "messages": formatted_messages, "temperature": 0.3}
@@ -123,7 +122,7 @@ class LLMClient:
             choice = data["choices"][0]["message"]
             return {"content": choice.get("content", ""), "tool_calls": [], "provider": "sarvam"}
 
-    def _call_openai(self, messages: List[Dict[str, str]], tools: List[Dict[str, Any]], system_prompt: str) -> Dict[str, Any]:
+    def _call_openai(self, messages: list[dict[str, str]], tools: list[dict[str, Any]], system_prompt: str) -> dict[str, Any]:
         formatted_tools = [{"type": "function", "function": {"name": t["name"], "description": t["description"], "parameters": t["parameters"]}} for t in tools]
         model = self.default_model or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
         payload = {"model": model, "messages": [{"role": "system", "content": system_prompt}] + messages, "tools": formatted_tools, "tool_choice": "auto"}
@@ -141,7 +140,7 @@ class LLMClient:
             parsed_tool_calls = [{"id": tc["id"], "tool_name": tc["function"]["name"], "arguments": json.loads(tc["function"]["arguments"])} for tc in tool_calls]
             return {"content": choice.get("content", ""), "tool_calls": parsed_tool_calls, "provider": "openai"}
 
-    def _call_anthropic(self, messages: List[Dict[str, str]], tools: List[Dict[str, Any]], system_prompt: str) -> Dict[str, Any]:
+    def _call_anthropic(self, messages: list[dict[str, str]], tools: list[dict[str, Any]], system_prompt: str) -> dict[str, Any]:
         formatted_tools = [{"name": t["name"], "description": t["description"], "input_schema": t["parameters"]} for t in tools]
         model = self.default_model or os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")
         payload = {"model": model, "max_tokens": 1024, "system": system_prompt, "messages": messages, "tools": formatted_tools}
@@ -160,7 +159,7 @@ class LLMClient:
             parsed_tool_calls = [{"id": b["id"], "tool_name": b["name"], "arguments": b["input"]} for b in tool_use_blocks]
             return {"content": "\n".join(text_blocks), "tool_calls": parsed_tool_calls, "provider": "anthropic"}
 
-    def _call_ollama(self, messages: List[Dict[str, str]], tools: List[Dict[str, Any]], system_prompt: str) -> Dict[str, Any]:
+    def _call_ollama(self, messages: list[dict[str, str]], tools: list[dict[str, Any]], system_prompt: str) -> dict[str, Any]:
         model = self.default_model or os.getenv("OLLAMA_MODEL", "llama3.2")
         payload = {"model": model, "messages": [{"role": "system", "content": system_prompt}] + messages, "stream": False}
 
@@ -174,7 +173,7 @@ class LLMClient:
             data = json.loads(resp.read().decode("utf-8"))
             return {"content": data.get("message", {}).get("content", ""), "tool_calls": [], "provider": "ollama"}
 
-    def _deterministic_fallback(self, messages: List[Dict[str, str]], tools: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _deterministic_fallback(self, messages: list[dict[str, str]], tools: list[dict[str, Any]]) -> dict[str, Any]:
         last_message = messages[-1]["content"] if messages else ""
         lower = last_message.lower()
 

@@ -1,30 +1,29 @@
+import json
+import re
 import time
 import uuid
-import re
-from typing import Dict, Any, Optional, List
+from pathlib import Path
+from typing import Any
+
+from .llm import SYSTEM_INJECTION_DEFENSE_PROMPT, LLMClient
 from .rag import execute_rag_pipeline
 from .tools import TOOL_DEFINITIONS, execute_typed_tool, get_tenant_products_sync
-from .llm import LLMClient, SYSTEM_INJECTION_DEFENSE_PROMPT
 
 llm_client = LLMClient()
-
-import os
-import json
-from pathlib import Path
 
 # Persistent multi-turn conversation state
 _CACHE_FILE = Path(__file__).resolve().parent.parent.parent / "data" / ".conv_cache.json"
 
-def _load_cache() -> Dict[str, Any]:
+def _load_cache() -> dict[str, Any]:
     try:
         if _CACHE_FILE.exists():
-            with open(_CACHE_FILE, "r", encoding="utf-8") as f:
+            with open(_CACHE_FILE, encoding="utf-8") as f:
                 return json.load(f)
     except Exception:
         pass
     return {"search_state": {}, "last_products": {}}
 
-def _save_cache(data: Dict[str, Any]):
+def _save_cache(data: dict[str, Any]):
     try:
         _CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
         with open(_CACHE_FILE, "w", encoding="utf-8") as f:
@@ -32,22 +31,22 @@ def _save_cache(data: Dict[str, Any]):
     except Exception:
         pass
 
-def get_conv_search_state(conv_id: str) -> Optional[Dict[str, Any]]:
+def get_conv_search_state(conv_id: str) -> dict[str, Any] | None:
     cache = _load_cache()
     return cache.get("search_state", {}).get(conv_id)
 
-def set_conv_search_state(conv_id: str, state: Dict[str, Any]):
+def set_conv_search_state(conv_id: str, state: dict[str, Any]):
     cache = _load_cache()
     if "search_state" not in cache:
         cache["search_state"] = {}
     cache["search_state"][conv_id] = state
     _save_cache(cache)
 
-def get_conv_last_products(conv_id: str) -> List[Dict[str, Any]]:
+def get_conv_last_products(conv_id: str) -> list[dict[str, Any]]:
     cache = _load_cache()
     return cache.get("last_products", {}).get(conv_id, [])
 
-def set_conv_last_products(conv_id: str, prods: List[Dict[str, Any]]):
+def set_conv_last_products(conv_id: str, prods: list[dict[str, Any]]):
     cache = _load_cache()
     if "last_products" not in cache:
         cache["last_products"] = {}
@@ -58,13 +57,13 @@ def run_agent_cycle(
     agent_id: str,
     message: str,
     workspace_id: str,
-    conversation_id: Optional[str] = None,
-    tenant_products: Optional[List[Dict[str, Any]]] = None,
-    tenant_chunks: Optional[List[Dict[str, Any]]] = None,
-    tenant_orders: Optional[List[Dict[str, Any]]] = None,
-    customer_identifier: Optional[str] = None,
-    last_search_state: Optional[Dict[str, Any]] = None
-) -> Dict[str, Any]:
+    conversation_id: str | None = None,
+    tenant_products: list[dict[str, Any]] | None = None,
+    tenant_chunks: list[dict[str, Any]] | None = None,
+    tenant_orders: list[dict[str, Any]] | None = None,
+    customer_identifier: str | None = None,
+    last_search_state: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """
     Executes a hardened multi-step AI reasoning cycle:
     1. Intent classification & prompt-injection defense check.
@@ -99,7 +98,7 @@ def run_agent_cycle(
     # 3. Model Tool Loop / Intent Resolver
     planning_steps.append("4. Invoking model tool-calling loop")
     messages = [{"role": "user", "content": message}]
-    
+
     model_output = llm_client.call_model(
         messages=messages,
         tools=TOOL_DEFINITIONS,
@@ -108,7 +107,7 @@ def run_agent_cycle(
 
     tool_calls = model_output.get("tool_calls", [])
     response_text = ""
-    interactive_payload = None
+    interactive_payload: dict[str, Any] | None = None
     detected_intent = "GENERAL_QUERY"
 
     # Contextual Pronoun / Inventory check resolution ("is size M in stock for this?")
@@ -158,7 +157,7 @@ def run_agent_cycle(
             t_args = dict(tc.get("arguments", {}))
             t_start = time.time()
 
-            extra_kwargs: Dict[str, Any] = {}
+            extra_kwargs: dict[str, Any] = {}
             if tenant_products is not None:
                 extra_kwargs["tenant_products"] = tenant_products
 
@@ -183,7 +182,7 @@ def run_agent_cycle(
             if t_name in ("search_products", "product_search"):
                 detected_intent = "PRODUCT_SEARCH"
                 prods = tool_result.get("products", [])
-                
+
                 # Update conversation search memory
                 state_to_save = {
                     "original_query": tool_result.get("applied_constraints", {}).get("original_query") or (current_search_state.get("original_query") if current_search_state else None) or message,

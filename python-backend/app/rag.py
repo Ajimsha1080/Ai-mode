@@ -1,18 +1,18 @@
-import os
-import math
-import re
-import json
 import asyncio
-import urllib.request
+import json
+import math
+import os
+import re
 import urllib.error
+import urllib.request
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Optional, Tuple
 from functools import lru_cache
+from typing import Any
+
 from sqlalchemy import select
-from sqlalchemy.orm import selectinload
 
 from .db.database import async_session_factory
-from .db.models import KnowledgeSourceModel, KnowledgeDocModel, KnowledgeChunkModel
+from .db.models import KnowledgeChunkModel, KnowledgeDocModel, KnowledgeSourceModel
 
 # ============================================================================
 # 1. EMBEDDING PROVIDER INTERFACE & IMPLEMENTATIONS
@@ -27,12 +27,12 @@ class EmbeddingProvider(ABC):
         pass
 
     @abstractmethod
-    def embed_text(self, text: str) -> List[float]:
+    def embed_text(self, text: str) -> list[float]:
         """Synchronous embedding of a single string."""
         pass
 
     @abstractmethod
-    def embed_batch(self, texts: List[str]) -> List[List[float]]:
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
         """Synchronous embedding of multiple strings."""
         pass
 
@@ -49,9 +49,9 @@ class LocalDeterministicEmbeddingProvider(EmbeddingProvider):
     def dimension(self) -> int:
         return self._dim
 
+    @staticmethod
     @lru_cache(maxsize=8192)
-    def _compute_embedding(self, text: str) -> Tuple[float, ...]:
-        dim = self._dim
+    def _compute_embedding_static(text: str, dim: int = 128) -> tuple[float, ...]:
         embedding = [0.0] * dim
         clean = re.sub(r'[^a-z0-9\s]', ' ', text.lower())
         words = [w for w in clean.split() if len(w) > 1]
@@ -79,10 +79,10 @@ class LocalDeterministicEmbeddingProvider(EmbeddingProvider):
             embedding = [x / norm for x in embedding]
         return tuple(embedding)
 
-    def embed_text(self, text: str) -> List[float]:
-        return list(self._compute_embedding(text))
+    def embed_text(self, text: str) -> list[float]:
+        return list(self._compute_embedding_static(text, self._dim))
 
-    def embed_batch(self, texts: List[str]) -> List[List[float]]:
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
         return [self.embed_text(t) for t in texts]
 
 
@@ -98,7 +98,7 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
     def dimension(self) -> int:
         return self._dim
 
-    def embed_text(self, text: str) -> List[float]:
+    def embed_text(self, text: str) -> list[float]:
         url = "https://api.openai.com/v1/embeddings"
         payload = {
             "model": self.model,
@@ -117,7 +117,7 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
             data = json.loads(resp.read().decode("utf-8"))
             return data["data"][0]["embedding"]
 
-    def embed_batch(self, texts: List[str]) -> List[List[float]]:
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
         url = "https://api.openai.com/v1/embeddings"
         payload = {
             "model": self.model,
@@ -149,7 +149,7 @@ class OllamaEmbeddingProvider(EmbeddingProvider):
     def dimension(self) -> int:
         return self._dim
 
-    def embed_text(self, text: str) -> List[float]:
+    def embed_text(self, text: str) -> list[float]:
         url = f"{self.base_url}/api/embeddings"
         payload = {
             "model": self.model,
@@ -165,7 +165,7 @@ class OllamaEmbeddingProvider(EmbeddingProvider):
             data = json.loads(resp.read().decode("utf-8"))
             return data.get("embedding", [0.0] * self._dim)
 
-    def embed_batch(self, texts: List[str]) -> List[List[float]]:
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
         return [self.embed_text(t) for t in texts]
 
 
@@ -190,7 +190,7 @@ def get_embedding_provider() -> EmbeddingProvider:
 
 _active_provider = get_embedding_provider()
 
-def generate_embedding(text: str, dim: int = 128) -> List[float]:
+def generate_embedding(text: str, dim: int = 128) -> list[float]:
     """Generates embedding using the active provider with automatic fallback."""
     try:
         provider = get_embedding_provider()
@@ -199,11 +199,11 @@ def generate_embedding(text: str, dim: int = 128) -> List[float]:
         fallback = LocalDeterministicEmbeddingProvider(dim=dim)
         return fallback.embed_text(text)
 
-def cosine_similarity(vec_a: List[float], vec_b: List[float]) -> float:
+def cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
     """Calculates cosine similarity between two float vectors."""
     if not vec_a or not vec_b or len(vec_a) != len(vec_b):
         return 0.0
-    dot = sum(a * b for a, b in zip(vec_a, vec_b))
+    dot = sum(a * b for a, b in zip(vec_a, vec_b, strict=True))
     norm_a = math.sqrt(sum(a * a for a in vec_a))
     norm_b = math.sqrt(sum(b * b for b in vec_b))
     denom = norm_a * norm_b
@@ -220,13 +220,13 @@ class BM25Retriever:
     IDF(q_i) = ln((N - n(q_i) + 0.5) / (n(q_i) + 0.5) + 1.0)
     score(D, Q) = sum(IDF(q_i) * (f(q_i, D) * (k1 + 1)) / (f(q_i, D) + k1 * (1 - b + b * (|D| / avgdl))))
     """
-    def __init__(self, corpus: List[str], k1: float = 1.5, b: float = 0.75):
+    def __init__(self, corpus: list[str], k1: float = 1.5, b: float = 0.75):
         self.k1 = k1
         self.b = b
         self.corpus_size = len(corpus)
         self.doc_lengths = []
         self.doc_term_freqs = []
-        self.doc_freqs = {}
+        self.doc_freqs: dict[str, int] = {}
         self.avg_doc_length = 0.0
 
         total_length = 0
@@ -236,7 +236,7 @@ class BM25Retriever:
             self.doc_lengths.append(length)
             total_length += length
 
-            tf = {}
+            tf: dict[str, int] = {}
             for t in tokens:
                 tf[t] = tf.get(t, 0) + 1
             self.doc_term_freqs.append(tf)
@@ -247,7 +247,7 @@ class BM25Retriever:
         self.avg_doc_length = (total_length / self.corpus_size) if self.corpus_size > 0 else 1.0
 
     @staticmethod
-    def tokenize(text: str) -> List[str]:
+    def tokenize(text: str) -> list[str]:
         clean = re.sub(r'[^a-zA-Z0-9\s]', ' ', text.lower())
         return [w for w in clean.split() if len(w) > 1]
 
@@ -255,7 +255,7 @@ class BM25Retriever:
         n = self.doc_freqs.get(term, 0)
         return math.log(((self.corpus_size - n + 0.5) / (n + 0.5)) + 1.0)
 
-    def score(self, query: str) -> List[float]:
+    def score(self, query: str) -> list[float]:
         q_tokens = self.tokenize(query)
         scores = [0.0] * self.corpus_size
         if self.corpus_size == 0 or not q_tokens:
@@ -280,7 +280,7 @@ class BM25Retriever:
 # 3. DYNAMIC DATABASE-BACKED KNOWLEDGE RETRIEVAL (STRICT TENANT ISOLATION)
 # ============================================================================
 
-async def fetch_tenant_chunks_from_db(workspace_id: str) -> List[Dict[str, Any]]:
+async def fetch_tenant_chunks_from_db(workspace_id: str) -> list[dict[str, Any]]:
     """Reads knowledge chunks and parent document titles directly from the SQL database."""
     if not workspace_id:
         raise ValueError("workspace_id is mandatory and cannot be empty")
@@ -307,10 +307,10 @@ async def fetch_tenant_chunks_from_db(workspace_id: str) -> List[Dict[str, Any]]
         return chunks
 
 
-def understand_query(question: str) -> Dict[str, Any]:
+def understand_query(question: str) -> dict[str, Any]:
     q = question.lower()
     detected_intent = "GENERAL_FAQ"
-    entities = {}
+    entities: dict[str, Any] = {}
 
     if re.search(r'return|refund|exchange|warranty|replace', q):
         detected_intent = "RETURN_OR_POLICY_INQUIRY"
@@ -331,7 +331,7 @@ def understand_query(question: str) -> Dict[str, Any]:
     }
 
 
-def rewrite_query(question: str, understanding: Dict[str, Any]) -> Dict[str, Any]:
+def rewrite_query(question: str, understanding: dict[str, Any]) -> dict[str, Any]:
     intent = understanding["detected_intent"]
     expansion_terms = []
 
@@ -353,7 +353,7 @@ def rewrite_query(question: str, understanding: Dict[str, Any]) -> Dict[str, Any
     }
 
 
-def hybrid_retrieve(query: str, workspace_id: str, tenant_chunks: List[Dict[str, Any]], top_k: int = 5):
+def hybrid_retrieve(query: str, workspace_id: str, tenant_chunks: list[dict[str, Any]], top_k: int = 5):
     """Hybrid dense vector and BM25 sparse token retrieval strictly scoped to tenant_chunks."""
     if not workspace_id:
         raise ValueError("workspace_id is mandatory and cannot be empty for hybrid_retrieve")
@@ -364,26 +364,27 @@ def hybrid_retrieve(query: str, workspace_id: str, tenant_chunks: List[Dict[str,
     dense_vec = generate_embedding(query)
 
     # 1. Dense scoring
-    dense_hits = []
+    dense_hits: list[dict[str, Any]] = []
     for idx, c in enumerate(tenant_chunks):
         cid = c.get("chunk_id") or c.get("id") or f"chk_{idx}"
         text_val = c.get("content") or c.get("text") or ""
-        c_emb = c.get("embedding") if isinstance(c.get("embedding"), list) else generate_embedding(text_val)
+        emb_val = c.get("embedding")
+        c_emb: list[float] = emb_val if isinstance(emb_val, list) else generate_embedding(text_val)
         score = cosine_similarity(dense_vec, c_emb)
-        dense_hits.append({"chunk_id": cid, "score": score, "chunk": c})
-    dense_hits.sort(key=lambda x: x["score"], reverse=True)
+        dense_hits.append({"chunk_id": cid, "score": float(score), "chunk": c})
+    dense_hits.sort(key=lambda x: float(x["score"]), reverse=True)
 
     # 2. BM25 Sparse scoring
     corpus_texts = [c.get("content") or c.get("text") or "" for c in tenant_chunks]
     bm25 = BM25Retriever(corpus_texts)
     bm25_scores = bm25.score(query)
 
-    sparse_hits = []
+    sparse_hits: list[dict[str, Any]] = []
     for idx, c in enumerate(tenant_chunks):
         cid = c.get("chunk_id") or c.get("id") or f"chk_{idx}"
         s_score = bm25_scores[idx]
-        sparse_hits.append({"chunk_id": cid, "score": s_score, "chunk": c})
-    sparse_hits.sort(key=lambda x: x["score"], reverse=True)
+        sparse_hits.append({"chunk_id": cid, "score": float(s_score), "chunk": c})
+    sparse_hits.sort(key=lambda x: float(x["score"]), reverse=True)
 
     return dense_hits[:top_k], sparse_hits[:top_k]
 
@@ -420,7 +421,7 @@ def reciprocal_rank_fusion(dense_hits, sparse_hits, k=60):
     return fused
 
 
-def rerank_candidates(fused_candidates, query: str, understanding: Dict[str, Any]):
+def rerank_candidates(fused_candidates, query: str, understanding: dict[str, Any]):
     query_words = [w for w in query.lower().split() if len(w) > 2]
     reranked = []
 
@@ -469,7 +470,7 @@ def assemble_context(reranked_chunks, top_k=3):
     }
 
 
-def verify_grounding(natural_answer: str, context: str, has_retrieved_chunks: bool) -> Dict[str, Any]:
+def verify_grounding(natural_answer: str, context: str, has_retrieved_chunks: bool) -> dict[str, Any]:
     """
     Real Entailment / Citation Grounding Check:
     Requires factual statements to be supported by retrieved chunks.
@@ -508,7 +509,7 @@ def verify_grounding(natural_answer: str, context: str, has_retrieved_chunks: bo
     }
 
 
-def execute_rag_pipeline(question: str, workspace_id: str, tenant_chunks: Optional[List[Dict[str, Any]]] = None, top_k: int = 3) -> Dict[str, Any]:
+def execute_rag_pipeline(question: str, workspace_id: str, tenant_chunks: list[dict[str, Any]] | None = None, top_k: int = 3) -> dict[str, Any]:
     if not workspace_id:
         raise ValueError("workspace_id is mandatory and cannot be empty for RAG execution")
 

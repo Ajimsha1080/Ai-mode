@@ -1,12 +1,11 @@
+import logging
 import os
 import time
-import uuid
-import jwt
-import bcrypt
-import logging
-from typing import Dict, Any, Optional, Tuple
 from collections import defaultdict
-from pydantic import BaseModel, EmailStr, Field
+from typing import Any
+
+import bcrypt
+import jwt
 
 logger = logging.getLogger("shopmate_auth")
 
@@ -14,10 +13,10 @@ SESSION_JWT_SECRET = os.getenv("SESSION_JWT_SECRET", "supersecret32characterlong
 SESSION_EXPIRY_SECONDS = 7 * 24 * 3600  # 7 days
 
 # In-memory login attempt rate limiter & lockout store
-_login_attempts: Dict[str, list] = defaultdict(list)
-_locked_accounts: Dict[str, float] = {}
+_login_attempts: dict[str, list] = defaultdict(list)
+_locked_accounts: dict[str, float] = {}
 
-def check_login_rate_limit(email: str, max_attempts: int = 5, window_sec: int = 900) -> Tuple[bool, int]:
+def check_login_rate_limit(email: str, max_attempts: int = 5, window_sec: int = 900) -> tuple[bool, int]:
     """
     Enforces maximum 5 failed attempts per 15-minute sliding window.
     Returns: (is_allowed, retry_after_seconds)
@@ -80,7 +79,7 @@ def create_session_jwt(user_id: str, email: str, workspace_id: str, is_super_adm
     }
     return jwt.encode(payload, SESSION_JWT_SECRET, algorithm="HS256")
 
-def verify_session_jwt(token: str) -> Optional[Dict[str, Any]]:
+def verify_session_jwt(token: str) -> dict[str, Any] | None:
     """Verifies and decodes a session JWT."""
     try:
         return jwt.decode(token, SESSION_JWT_SECRET, algorithms=["HS256"], audience="aaas-app", issuer="aaas-auth")

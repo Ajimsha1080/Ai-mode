@@ -1,18 +1,14 @@
-import sys
 import os
+import sys
 
 os.environ["APP_ENV"] = "development"
 
-import json
 import time
-from typing import List, Dict, Any
 
 # Add python-backend directory to sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__))))
 
 from app.agent_runtime import run_agent_cycle
-from app.rag import execute_rag_pipeline
-from app.tools import execute_typed_tool, calculate_cart, apply_discount, check_inventory
 from app.connectors import CsvCatalogConnector, ShopifyConnector, WooCommerceConnector
 
 # 24 Comprehensive Realistic Customer Queries
@@ -290,12 +286,12 @@ csv_02,Polar Thermal Gloves,29.99,0,Accessories,Windproof thermal gloves"""
     shopify_conn = ShopifyConnector("ws_shopify_demo", {})
     sp_prods = shopify_conn.sync_products()
     assert len(sp_prods) >= 1
-    print(f"  * ShopifyConnector: verified connector interface and sync contract.")
+    print("  * ShopifyConnector: verified connector interface and sync contract.")
 
     woo_conn = WooCommerceConnector("ws_woo_demo", {})
     wc_prods = woo_conn.sync_products()
     assert len(wc_prods) >= 1
-    print(f"  * WooCommerceConnector: verified connector interface and sync contract.")
+    print("  * WooCommerceConnector: verified connector interface and sync contract.")
 
     print("\nALL CONNECTORS & EVALUATION HARNESS COMPLETED SUCCESSFULLY!")
     if passed_count < len(EVAL_CASES):

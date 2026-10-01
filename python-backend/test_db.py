@@ -1,17 +1,22 @@
 import asyncio
-import sys
 import os
 
 # Set development environment for testing
 os.environ["APP_ENV"] = "development"
 
-from app.db.database import init_db, async_session_factory
-from app.db.repository import DatabaseRepository
+from app.db.database import async_session_factory, init_db
 from app.db.models import (
-    WorkspaceModel, ProductModel, AgentModel,
-    AgentConfigModel, AgentPolicyModel, KnowledgeSourceModel,
-    KnowledgeDocModel, KnowledgeChunkModel
+    AgentConfigModel,
+    AgentModel,
+    AgentPolicyModel,
+    KnowledgeChunkModel,
+    KnowledgeDocModel,
+    KnowledgeSourceModel,
+    ProductModel,
+    WorkspaceModel,
 )
+from app.db.repository import DatabaseRepository
+
 
 async def run_db_tests():
     print("=== 1. Initializing Enterprise Database Schema & Seeding ===")
@@ -29,7 +34,7 @@ async def run_db_tests():
                 ws = WorkspaceModel(id="ws_acme_corp", name="Acme Footwear", slug="acme-footwear", tier="ENTERPRISE")
                 session.add(ws)
                 await session.flush()
-            
+
             agent = AgentModel(id="agent_shopmate_01", workspace_id="ws_acme_corp", name="ShopMate Assistant", status="ACTIVE")
             session.add(agent)
             await session.flush()
@@ -116,7 +121,7 @@ async def run_db_tests():
         )
         await session.commit()
         print(f"[OK] Order created: {order.id} for ${order.total_amount}")
-        
+
         # Verify stock updated
         updated_prod = await session.get(ProductModel, target_prod.id)
         assert updated_prod.stock == initial_stock - 2, "Stock deduction failed!"

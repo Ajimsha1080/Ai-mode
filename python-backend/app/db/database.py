@@ -1,15 +1,18 @@
 import os
-import sys
-from pathlib import Path
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import Optional, AsyncGenerator
-from sqlalchemy import text, event
+from pathlib import Path
+from typing import Any
+
+from sqlalchemy import event, text
 from sqlalchemy.engine import Engine
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
-from sqlalchemy.orm import declarative_base
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.pool import NullPool
 
 # Base declarative class
-Base = declarative_base()
+class Base(DeclarativeBase):
+    pass
 
 # Resolve Database URL
 DEFAULT_DATA_DIR = Path(__file__).resolve().parent.parent.parent.parent / "data"
@@ -31,10 +34,8 @@ else:
     else:
         DATABASE_URL = raw_db_url
 
-from sqlalchemy.pool import NullPool
-
 # Engine options
-engine_kwargs = {
+engine_kwargs: dict[str, Any] = {
     "echo": False,
     "future": True,
 }
@@ -89,7 +90,7 @@ TENANT_TABLES = [
     "audit_logs"
 ]
 
-async def set_tenant_context(session: AsyncSession, workspace_id: Optional[str] = None, is_super_admin: bool = False):
+async def set_tenant_context(session: AsyncSession, workspace_id: str | None = None, is_super_admin: bool = False):
     """Sets PostgreSQL transaction-local configuration for Row-Level Security."""
     if "postgresql" in DATABASE_URL:
         # Transaction-scoped (is_local=true). Clears automatically on commit or rollback.
@@ -104,7 +105,7 @@ async def set_tenant_context(session: AsyncSession, workspace_id: Optional[str] 
         )
 
 @asynccontextmanager
-async def tenant_session(workspace_id: Optional[str] = None, is_super_admin: bool = False) -> AsyncGenerator[AsyncSession, None]:
+async def tenant_session(workspace_id: str | None = None, is_super_admin: bool = False) -> AsyncGenerator[AsyncSession, None]:
     """Provides a scoped async session with enforced Postgres Row-Level Security."""
     async with async_session_factory() as session:
         await set_tenant_context(session, workspace_id=workspace_id, is_super_admin=is_super_admin)
@@ -160,16 +161,16 @@ async def apply_postgres_rls_and_vector_indices(conn):
                     USING (
                         (current_setting('app.is_super_admin', true) = 'true')
                         OR (
-                            workspace_id IS NOT NULL 
-                            AND workspace_id <> '' 
+                            workspace_id IS NOT NULL
+                            AND workspace_id <> ''
                             AND workspace_id = NULLIF(current_setting('app.current_tenant_id', true), '')
                         )
                     )
                     WITH CHECK (
                         (current_setting('app.is_super_admin', true) = 'true')
                         OR (
-                            workspace_id IS NOT NULL 
-                            AND workspace_id <> '' 
+                            workspace_id IS NOT NULL
+                            AND workspace_id <> ''
                             AND workspace_id = NULLIF(current_setting('app.current_tenant_id', true), '')
                         )
                     );
@@ -180,12 +181,12 @@ async def apply_postgres_rls_and_vector_indices(conn):
         # 4. Create HNSW Vector Index for fast approximate cosine similarity
         try:
             await conn.execute(text("""
-                CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_embedding_hnsw 
+                CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_embedding_hnsw
                 ON knowledge_chunks USING hnsw (embedding vector_cosine_ops)
                 WITH (m = 16, ef_construction = 64);
             """))
             await conn.execute(text("""
-                CREATE INDEX IF NOT EXISTS idx_commerce_products_embedding_hnsw 
+                CREATE INDEX IF NOT EXISTS idx_commerce_products_embedding_hnsw
                 ON commerce_products USING hnsw (embedding vector_cosine_ops)
                 WITH (m = 16, ef_construction = 64);
             """))
@@ -194,9 +195,8 @@ async def apply_postgres_rls_and_vector_indices(conn):
 
 async def init_db():
     """Initializes database schema, pgvector extensions, RLS policies, and seeds dev data."""
-    from . import models
     from .seed import seed_database_if_empty
-    
+
     async with engine.begin() as conn:
         if "postgresql" in DATABASE_URL:
             try:
@@ -205,7 +205,7 @@ async def init_db():
                 pass
         await conn.run_sync(Base.metadata.create_all)
         await apply_postgres_rls_and_vector_indices(conn)
-    
+
     # Run dev seeding if applicable
     async with async_session_factory() as session:
         await seed_database_if_empty(session)

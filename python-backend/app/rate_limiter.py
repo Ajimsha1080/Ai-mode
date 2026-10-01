@@ -1,7 +1,6 @@
+import logging
 import os
 import time
-import logging
-from typing import Optional, Tuple
 
 logger = logging.getLogger("rate_limiter")
 
@@ -32,7 +31,7 @@ class TenantRateLimiter:
             logger.warning(f"Redis unavailable ({str(e)}), using resilient in-memory rate limiter.")
             self._redis_client = None
 
-    def check_rate_limit(self, workspace_id: str, max_requests: int = 120, window_seconds: int = 60) -> Tuple[bool, int, int]:
+    def check_rate_limit(self, workspace_id: str, max_requests: int = 120, window_seconds: int = 60) -> tuple[bool, int, int]:
         """
         Checks if workspace is within rate limits.
         Returns: (is_allowed, remaining_requests, retry_after_seconds)

@@ -1,11 +1,10 @@
+
 import pytest
 import pytest_asyncio
-import uuid
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.db.database import Base, TENANT_TABLES, set_tenant_context, tenant_session, DEFAULT_DB_PATH
-from app.db.models import WorkspaceModel, ProductModel, KnowledgeChunkModel, AgentModel
+from app.db.database import TENANT_TABLES, Base, set_tenant_context
+from app.db.models import ProductModel, WorkspaceModel
 from app.db.repository import DatabaseRepository
 
 TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
@@ -14,10 +13,10 @@ TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
 async def rls_test_session():
     test_engine = create_async_engine(TEST_DB_URL, echo=False)
     test_session_factory = async_sessionmaker(test_engine, expire_on_commit=False, class_=AsyncSession)
-    
+
     async with test_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        
+
     async with test_session_factory() as session:
         # Seed two distinct workspaces
         ws_a = WorkspaceModel(id="ws_tenant_alpha", name="Tenant Alpha", slug="tenant-alpha")
@@ -81,7 +80,7 @@ async def test_tenant_query_isolation(rls_test_session: AsyncSession):
 async def test_missing_tenant_fails_closed(rls_test_session: AsyncSession):
     """Verifies that an unauthenticated or missing tenant context returns zero rows."""
     repo = DatabaseRepository(rls_test_session)
-    
+
     # Query with empty or non-existent tenant
     empty_prods = await repo.get_all_products(workspace_id="ws_non_existent")
     assert len(empty_prods) == 0, "Non-existent tenant must return zero records"
@@ -108,8 +107,8 @@ async def test_postgres_rls_sql_policy_syntax():
             USING (
                 (current_setting('app.is_super_admin', true) = 'true')
                 OR (
-                    workspace_id IS NOT NULL 
-                    AND workspace_id <> '' 
+                    workspace_id IS NOT NULL
+                    AND workspace_id <> ''
                     AND workspace_id = NULLIF(current_setting('app.current_tenant_id', true), '')
                 )
             );
@@ -123,8 +122,6 @@ async def test_postgres_rls_sql_policy_syntax():
 @pytest.mark.asyncio
 async def test_connection_pooling_context_reset():
     """Verifies that transaction-local context set_tenant_context uses is_local=true."""
-    from app.db.database import set_tenant_context
-    # Verify set_config is called with true (is_local)
-    test_session = AsyncSession()
     # Inspection of set_tenant_context logic
     assert set_tenant_context is not None
+

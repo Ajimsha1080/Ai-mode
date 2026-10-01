@@ -1,14 +1,15 @@
 """Initial schema, pgvector HNSW indices, and Postgres Row-Level Security
 
 Revision ID: 20261002_0001
-Revises: 
+Revises:
 Create Date: 2026-10-02 00:00:00.000000
 
 """
-from typing import Sequence, Union
-from alembic import op
+from collections.abc import Sequence
+
 import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 try:
     from pgvector.sqlalchemy import Vector
@@ -17,9 +18,9 @@ except ImportError:
     HAS_PGVECTOR = False
 
 revision: str = '20261002_0001'
-down_revision: Union[str, None] = None
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = None
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 TENANT_TABLES = [
     "workspace_members", "agents", "agent_configs", "agent_versions",
@@ -351,12 +352,12 @@ def upgrade() -> None:
 
         # HNSW Index for fast vector similarity search
         op.execute("""
-            CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_embedding_hnsw 
+            CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_embedding_hnsw
             ON knowledge_chunks USING hnsw (embedding vector_cosine_ops)
             WITH (m = 16, ef_construction = 64);
         """)
         op.execute("""
-            CREATE INDEX IF NOT EXISTS idx_commerce_products_embedding_hnsw 
+            CREATE INDEX IF NOT EXISTS idx_commerce_products_embedding_hnsw
             ON commerce_products USING hnsw (embedding vector_cosine_ops)
             WITH (m = 16, ef_construction = 64);
         """)

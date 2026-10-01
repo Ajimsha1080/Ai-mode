@@ -1,24 +1,26 @@
+from typing import Any
+
 from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
+
 
 class ChatRequest(BaseModel):
     message: str = Field(..., description="User question or prompt")
-    conversation_id: Optional[str] = None
-    workspace_id: Optional[str] = None
-    customer_identifier: Optional[str] = "guest_user"
-    channel: Optional[str] = "PLAYGROUND"
+    conversation_id: str | None = None
+    workspace_id: str | None = None
+    customer_identifier: str | None = "guest_user"
+    channel: str | None = "PLAYGROUND"
 
 class RAGQueryRequest(BaseModel):
     question: str = Field(..., description="Query for knowledge retrieval")
-    workspace_id: Optional[str] = None
-    top_k: Optional[int] = 3
-    min_score: Optional[float] = 0.20
+    workspace_id: str | None = None
+    top_k: int | None = 3
+    min_score: float | None = 0.20
 
 class KnowledgeIngestRequest(BaseModel):
     title: str = Field(..., description="Document title")
     content: str = Field(..., description="Raw text content to chunk and index")
-    workspace_id: Optional[str] = None
-    metadata: Optional[Dict[str, Any]] = None
+    workspace_id: str | None = None
+    metadata: dict[str, Any] | None = None
 
 class Citation(BaseModel):
     document_name: str
@@ -27,28 +29,28 @@ class Citation(BaseModel):
     is_verified: bool = True
 
 class RAGPipelineTrace(BaseModel):
-    query_understanding: Dict[str, Any]
-    query_rewrite: Dict[str, Any]
-    hybrid_retrieval: Dict[str, Any]
-    rrf_fusion: Dict[str, Any]
-    reranking: Dict[str, Any]
-    context_assembly: Dict[str, Any]
-    grounding_verification: Dict[str, Any]
+    query_understanding: dict[str, Any]
+    query_rewrite: dict[str, Any]
+    hybrid_retrieval: dict[str, Any]
+    rrf_fusion: dict[str, Any]
+    reranking: dict[str, Any]
+    context_assembly: dict[str, Any]
+    grounding_verification: dict[str, Any]
 
 class ExecutionTrace(BaseModel):
     id: str
     conversation_id: str
     agent_id: str
     intent: str
-    planning_steps: List[str]
-    tool_executions: List[Dict[str, Any]]
-    retrieved_citations: List[Citation]
-    rag_pipeline: Optional[RAGPipelineTrace] = None
+    planning_steps: list[str]
+    tool_executions: list[dict[str, Any]]
+    retrieved_citations: list[Citation]
+    rag_pipeline: RAGPipelineTrace | None = None
     latency_ms: int
 
 class ChatResponse(BaseModel):
     conversation_id: str
     message_id: str
     response: str
-    interactive_payload: Optional[Dict[str, Any]] = None
+    interactive_payload: dict[str, Any] | None = None
     trace: ExecutionTrace

@@ -1,11 +1,10 @@
 import asyncio
 import math
-import sys
 import os
 
 os.environ["APP_ENV"] = "development"
 
-from app.db.database import init_db, async_session_factory
+from app.db.database import async_session_factory, init_db
 from app.db.repository import DatabaseRepository
 
 TENANT_PROFILES = [
@@ -85,7 +84,7 @@ async def run_massive_multitenancy_test():
             vector_hits = await repo.vector_similarity_search(target_tenant["id"], target_query_vec, top_k=5)
 
             assert len(vector_hits) > 0, f"No vector hits for {target_tenant['id']}"
-            
+
             # Check text matches target tenant policy
             top_hit = vector_hits[0]
             assert target_tenant["policy"][:30] in top_hit["text"], f"Vector search returned wrong policy for {target_tenant['id']}"

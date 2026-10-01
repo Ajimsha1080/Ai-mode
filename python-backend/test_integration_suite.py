@@ -1,10 +1,11 @@
-import os
-import pytest
 import asyncio
+import os
 import time
+
 import jwt
-from cryptography.hazmat.primitives.asymmetric import rsa
+import pytest
 from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 
 # Test RS256 Keys
 test_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -22,23 +23,14 @@ os.environ["SERVICE_JWT_PUBLIC_KEY"] = PUBLIC_PEM
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./test_integration.db"
 os.environ["APP_ENV"] = "development"
 
-from app.db.database import init_db, async_session_factory
-from app.db.repository import DatabaseRepository
-from app.auth import verify_service_jwt, decode_token
-from app.rag import execute_rag_pipeline, LocalDeterministicEmbeddingProvider
-from app.tools import (
-    search_products,
-    get_inventory,
-    lookup_order,
-    coupon_validation,
-    return_eligibility,
-    create_return,
-    add_to_cart,
-    cart_lookup,
-    human_handoff,
-    execute_typed_tool
-)
 from app.agent_runtime import run_agent_cycle
+from app.auth import verify_service_jwt
+from app.db.database import async_session_factory, init_db
+from app.db.repository import DatabaseRepository
+from app.rag import LocalDeterministicEmbeddingProvider, execute_rag_pipeline
+from app.tools import (
+    execute_typed_tool,
+)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -53,10 +45,10 @@ async def test_01_database_engine_and_seed_integrity():
         repo = DatabaseRepository(session)
         products = await repo.get_all_products(workspace_id="ws_acme_corp")
         chunks = await repo.get_tenant_chunks(workspace_id="ws_acme_corp")
-        
+
         assert len(products) >= 4, "Must have at least 4 products in seed data"
         assert len(chunks) >= 1, "Must have at least 1 knowledge chunk in seed data"
-        
+
         # Verify product structure
         jacket = next((p for p in products if "jacket" in p.title.lower()), None)
         assert jacket is not None, "Seed data must contain a jacket"
@@ -80,11 +72,11 @@ def test_02_authentication_and_jwt_rbac():
         PRIVATE_PEM,
         algorithm="RS256"
     )
-    
+
     claims = verify_service_jwt(f"Bearer {token}")
     assert claims["workspace_id"] == "ws_acme_corp"
     assert claims["role"] == "ADMIN"
-    
+
     # Test expired token rejection
     expired_token = jwt.encode(
         {
@@ -108,9 +100,9 @@ def test_03_rag_semantic_and_bm25_retrieval():
     vec1 = embedder.embed_text("return and exchange policy within 7 days")
     vec2 = embedder.embed_text("how do I exchange an item for refund")
     vec3 = embedder.embed_text("electronics high definition sound amplifier")
-    
+
     assert len(vec1) == 128
-    
+
     # Cosine similarity
     import math
     def cosine_sim(a, b):

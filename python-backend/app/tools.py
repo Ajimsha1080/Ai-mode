@@ -1,15 +1,14 @@
-import os
-import re
-import math
-import uuid
 import asyncio
-from typing import List, Dict, Any, Optional, Union
+import re
+import uuid
+from typing import Any
+
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from .db.database import async_session_factory
-from .db.models import ProductModel, OrderModel, CartModel
-from .rag import generate_embedding, cosine_similarity
+from .db.models import OrderModel, ProductModel
+from .rag import cosine_similarity, generate_embedding
 
 # ============================================================================
 # 1. PYDANTIC INPUT & OUTPUT SCHEMAS FOR ALL 10 TOOLS
@@ -17,20 +16,20 @@ from .rag import generate_embedding, cosine_similarity
 
 # Tool 1: search_products
 class SearchProductsInput(BaseModel):
-    query: Optional[str] = Field(default="", description="Search query string")
-    category: Optional[str] = Field(default=None, description="Explicit category filter")
-    gender: Optional[str] = Field(default=None, description="Demographic constraint: men, women, unisex, kids")
-    min_price: Optional[float] = Field(default=None, description="Minimum price bound")
-    max_price: Optional[float] = Field(default=None, description="Maximum price bound")
-    size: Optional[str] = Field(default=None, description="Size attribute filter (S, M, L, XL, etc.)")
-    color: Optional[str] = Field(default=None, description="Color attribute filter")
-    in_stock_only: Optional[bool] = Field(default=False, description="Filter for in-stock products only")
-    sort: Optional[str] = Field(default="relevance", description="Sort order: relevance, price_asc, price_desc, newest")
-    page: Optional[int] = Field(default=1, description="1-indexed page number")
-    page_size: Optional[int] = Field(default=6, description="Items per page")
+    query: str | None = Field(default="", description="Search query string")
+    category: str | None = Field(default=None, description="Explicit category filter")
+    gender: str | None = Field(default=None, description="Demographic constraint: men, women, unisex, kids")
+    min_price: float | None = Field(default=None, description="Minimum price bound")
+    max_price: float | None = Field(default=None, description="Maximum price bound")
+    size: str | None = Field(default=None, description="Size attribute filter (S, M, L, XL, etc.)")
+    color: str | None = Field(default=None, description="Color attribute filter")
+    in_stock_only: bool | None = Field(default=False, description="Filter for in-stock products only")
+    sort: str | None = Field(default="relevance", description="Sort order: relevance, price_asc, price_desc, newest")
+    page: int | None = Field(default=1, description="1-indexed page number")
+    page_size: int | None = Field(default=6, description="Items per page")
 
 class SearchProductsOutput(BaseModel):
-    products: List[Dict[str, Any]] = Field(default_factory=list)
+    products: list[dict[str, Any]] = Field(default_factory=list)
     total_matches: int = 0
     totalMatches: int = 0
     page: int = 1
@@ -38,25 +37,25 @@ class SearchProductsOutput(BaseModel):
     pageSize: int = 6
     has_more: bool = False
     hasMore: bool = False
-    applied_constraints: Dict[str, Any] = Field(default_factory=dict)
-    appliedConstraints: Dict[str, Any] = Field(default_factory=dict)
-    categories_matched: List[str] = Field(default_factory=list)
-    categoriesMatched: List[str] = Field(default_factory=list)
+    applied_constraints: dict[str, Any] = Field(default_factory=dict)
+    appliedConstraints: dict[str, Any] = Field(default_factory=dict)
+    categories_matched: list[str] = Field(default_factory=list)
+    categoriesMatched: list[str] = Field(default_factory=list)
 
 # Tool 2: get_inventory / check_inventory
 class GetInventoryInput(BaseModel):
     product_id: str = Field(..., description="Product ID to check inventory for")
-    variant_id: Optional[str] = Field(default=None, description="Specific variant ID")
-    size: Optional[str] = Field(default=None, description="Size attribute to check")
-    color: Optional[str] = Field(default=None, description="Color attribute to check")
+    variant_id: str | None = Field(default=None, description="Specific variant ID")
+    size: str | None = Field(default=None, description="Size attribute to check")
+    color: str | None = Field(default=None, description="Color attribute to check")
 
 class GetInventoryOutput(BaseModel):
     product_id: str
     title: str = ""
     in_stock: bool = False
     stock_count: int = 0
-    available_sizes: List[str] = Field(default_factory=list)
-    available_colors: List[str] = Field(default_factory=list)
+    available_sizes: list[str] = Field(default_factory=list)
+    available_colors: list[str] = Field(default_factory=list)
     message: str = ""
 
 # Tool 3: order_lookup
@@ -66,13 +65,13 @@ class OrderLookupInput(BaseModel):
 
 class OrderLookupOutput(BaseModel):
     found: bool = False
-    order: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
+    order: dict[str, Any] | None = None
+    error: str | None = None
 
 # Tool 4: order_tracking
 class OrderTrackingInput(BaseModel):
     order_number: str = Field(..., description="Order number to track")
-    customer_email: Optional[str] = Field(default=None, description="Customer email address")
+    customer_email: str | None = Field(default=None, description="Customer email address")
 
 class OrderTrackingOutput(BaseModel):
     found: bool = False
@@ -82,7 +81,7 @@ class OrderTrackingOutput(BaseModel):
     tracking_number: str = ""
     masked_address: str = ""
     estimated_delivery: str = ""
-    items: List[str] = Field(default_factory=list)
+    items: list[str] = Field(default_factory=list)
 
 # Tool 5: coupon_validation / apply_discount
 class CouponValidationInput(BaseModel):
@@ -99,8 +98,8 @@ class CouponValidationOutput(BaseModel):
 # Tool 6: return_eligibility
 class ReturnEligibilityInput(BaseModel):
     order_number: str = Field(..., description="Order confirmation number")
-    customer_email: Optional[str] = Field(default=None, description="Customer email")
-    product_id: Optional[str] = Field(default=None, description="Product ID to return")
+    customer_email: str | None = Field(default=None, description="Customer email")
+    product_id: str | None = Field(default=None, description="Product ID to return")
 
 class ReturnEligibilityOutput(BaseModel):
     eligible: bool = False
@@ -113,7 +112,7 @@ class ReturnEligibilityOutput(BaseModel):
 class CreateReturnInput(BaseModel):
     order_number: str = Field(..., description="Order confirmation number")
     customer_email: str = Field(..., description="Customer email for return verification")
-    product_id: Optional[str] = Field(default=None, description="Product ID being returned")
+    product_id: str | None = Field(default=None, description="Product ID being returned")
     reason: str = Field(default="Sizing exchange", description="Reason for return or exchange")
 
 class CreateReturnOutput(BaseModel):
@@ -126,12 +125,12 @@ class CreateReturnOutput(BaseModel):
 
 # Tool 8: add_to_cart
 class AddToCartInput(BaseModel):
-    cart_id: Optional[str] = Field(default=None, description="Active cart ID or session ID")
+    cart_id: str | None = Field(default=None, description="Active cart ID or session ID")
     product_id: str = Field(..., description="Product ID to add")
-    variant_id: Optional[str] = Field(default=None, description="Variant ID")
+    variant_id: str | None = Field(default=None, description="Variant ID")
     quantity: int = Field(default=1, description="Quantity of product to add")
-    size: Optional[str] = Field(default=None, description="Size attribute")
-    color: Optional[str] = Field(default=None, description="Color attribute")
+    size: str | None = Field(default=None, description="Size attribute")
+    color: str | None = Field(default=None, description="Color attribute")
 
 class AddToCartOutput(BaseModel):
     success: bool = False
@@ -146,28 +145,28 @@ class AddToCartOutput(BaseModel):
 
 # Tool 9: cart_lookup / calculate_cart
 class CartLookupInput(BaseModel):
-    cart_id: Optional[str] = Field(default=None, description="Active cart ID")
-    session_id: Optional[str] = Field(default=None, description="Active customer session ID")
-    items: Optional[List[Dict[str, Any]]] = Field(default=None, description="Ad-hoc items list for calculation")
-    discount_code: Optional[str] = Field(default=None, description="Discount promo code to apply")
+    cart_id: str | None = Field(default=None, description="Active cart ID")
+    session_id: str | None = Field(default=None, description="Active customer session ID")
+    items: list[dict[str, Any]] | None = Field(default=None, description="Ad-hoc items list for calculation")
+    discount_code: str | None = Field(default=None, description="Discount promo code to apply")
 
 class CartLookupOutput(BaseModel):
     cart_id: str = ""
-    items: List[Dict[str, Any]] = Field(default_factory=list)
-    line_items: List[Dict[str, Any]] = Field(default_factory=list)
+    items: list[dict[str, Any]] = Field(default_factory=list)
+    line_items: list[dict[str, Any]] = Field(default_factory=list)
     subtotal: float = 0.0
     shipping_amount: float = 0.0
     tax_amount: float = 0.0
     discount_amount: float = 0.0
     grand_total: float = 0.0
     total: float = 0.0
-    discount_applied: Optional[Dict[str, Any]] = None
+    discount_applied: dict[str, Any] | None = None
 
 # Tool 10: human_handoff
 class HumanHandoffInput(BaseModel):
     reason: str = Field(default="Customer requested human support", description="Reason for escalation")
-    customer_email: Optional[str] = Field(default=None, description="Customer email")
-    summary: Optional[str] = Field(default=None, description="Context summary of the inquiry")
+    customer_email: str | None = Field(default=None, description="Customer email")
+    summary: str | None = Field(default=None, description="Context summary of the inquiry")
 
 class HumanHandoffOutput(BaseModel):
     status: str = "ESCALATED"
@@ -254,7 +253,7 @@ TOOL_DEFINITIONS = [
 # 2. NLP UTILITIES & SCHEMA INTROSPECTION
 # ============================================================================
 
-TYPO_MAP: Dict[str, str] = {
+TYPO_MAP: dict[str, str] = {
     "wmoen": "women",
     "womne": "women",
     "wommen": "women",
@@ -297,7 +296,7 @@ def stem_word(word: str) -> str:
         return w[:-1]
     return w
 
-def check_is_women_product(p: Dict[str, Any]) -> bool:
+def check_is_women_product(p: dict[str, Any]) -> bool:
     title_l = p.get("title", "").lower()
     tags_l = " ".join([t.lower() for t in p.get("tags", [])])
     cat_l = p.get("category", "").lower()
@@ -312,7 +311,7 @@ def check_is_women_product(p: Dict[str, Any]) -> bool:
 # 3. DATABASE FETCH HELPERS (MULTI-TENANT)
 # ============================================================================
 
-async def _fetch_products_db(workspace_id: str) -> List[Dict[str, Any]]:
+async def _fetch_products_db(workspace_id: str) -> list[dict[str, Any]]:
     async with async_session_factory() as session:
         stmt = select(ProductModel).where(ProductModel.workspace_id == workspace_id)
         res = await session.execute(stmt)
@@ -339,7 +338,7 @@ async def _fetch_products_db(workspace_id: str) -> List[Dict[str, Any]]:
             for p in prods
         ]
 
-async def _fetch_order_db(workspace_id: str, order_number: str, customer_email: Optional[str] = None) -> Optional[Dict[str, Any]]:
+async def _fetch_order_db(workspace_id: str, order_number: str, customer_email: str | None = None) -> dict[str, Any] | None:
     if not customer_email or not customer_email.strip():
         return None
     clean_num = order_number.strip()
@@ -370,7 +369,7 @@ async def _fetch_order_db(workspace_id: str, order_number: str, customer_email: 
                 }
         return None
 
-def get_tenant_products_sync(workspace_id: str) -> List[Dict[str, Any]]:
+def get_tenant_products_sync(workspace_id: str) -> list[dict[str, Any]]:
     if not workspace_id:
         raise ValueError("workspace_id is mandatory")
     try:
@@ -388,7 +387,7 @@ def get_tenant_products_sync(workspace_id: str) -> List[Dict[str, Any]]:
     except Exception:
         return []
 
-def get_tenant_order_sync(workspace_id: str, order_number: str, customer_email: Optional[str] = None) -> Optional[Dict[str, Any]]:
+def get_tenant_order_sync(workspace_id: str, order_number: str, customer_email: str | None = None) -> dict[str, Any] | None:
     if not workspace_id:
         raise ValueError("workspace_id is mandatory")
     try:
@@ -411,10 +410,10 @@ def get_tenant_order_sync(workspace_id: str, order_number: str, customer_email: 
 # 4. QUERY PARSING & ENTITY EXTRACTION
 # ============================================================================
 
-def introspect_catalog_schema(products: List[Dict[str, Any]]) -> Dict[str, Any]:
-    categories = sorted(list(set(p.get("category", "").strip() for p in products if p.get("category"))))
-    tags = sorted(list(set(t.strip().lower() for p in products for t in p.get("tags", []) if t)))
-    attribute_values: Dict[str, List[str]] = {}
+def introspect_catalog_schema(products: list[dict[str, Any]]) -> dict[str, Any]:
+    categories = sorted({p.get("category", "").strip() for p in products if p.get("category")})
+    tags = sorted({t.strip().lower() for p in products for t in p.get("tags", []) if t})
+    attribute_values: dict[str, list[str]] = {}
 
     for p in products:
         for v in p.get("variants", []):
@@ -434,7 +433,7 @@ def introspect_catalog_schema(products: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def parse_search_query(user_query: str, schema: Dict[str, Any], last_search_state: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def parse_search_query(user_query: str, schema: dict[str, Any], last_search_state: dict[str, Any] | None = None) -> dict[str, Any]:
     q = user_query.lower().strip()
     for typo, fix in TYPO_MAP.items():
         q = re.sub(rf'\b{typo}\b', fix, q)
@@ -576,9 +575,9 @@ def parse_search_query(user_query: str, schema: Dict[str, Any], last_search_stat
         if not size:
             size = last_search_state.get("size")
         if sort == "relevance" and last_search_state.get("sort"):
-            sort = last_search_state.get("sort")
+            sort = str(last_search_state.get("sort"))
         if not content_tokens and last_search_state.get("contentTokens"):
-            content_tokens = last_search_state.get("contentTokens")
+            content_tokens = list(last_search_state.get("contentTokens") or [])
     elif is_refinement and last_search_state:
         original_query = last_search_state.get("original_query") or clean_q
         if not explicit_category:
@@ -594,7 +593,7 @@ def parse_search_query(user_query: str, schema: Dict[str, Any], last_search_stat
         if not size:
             size = last_search_state.get("size")
         if sort == "relevance" and last_search_state.get("sort"):
-            sort = last_search_state.get("sort")
+            sort = str(last_search_state.get("sort"))
 
     return {
         "scope": scope,
@@ -618,7 +617,7 @@ def parse_search_query(user_query: str, schema: Dict[str, Any], last_search_stat
 # 5. HIGH-PERFORMANCE PRODUCT SEARCH & FILTERING
 # ============================================================================
 
-def search_products(workspace_id: str, query: str = "", category: Optional[str] = None, last_search_state: Optional[Dict[str, Any]] = None, tenant_products: Optional[List[Dict[str, Any]]] = None, **kwargs) -> Dict[str, Any]:
+def search_products(workspace_id: str, query: str = "", category: str | None = None, last_search_state: dict[str, Any] | None = None, tenant_products: list[dict[str, Any]] | None = None, **kwargs) -> dict[str, Any]:
     if not workspace_id:
         raise ValueError("workspace_id is mandatory for search_products")
 
@@ -691,7 +690,7 @@ def search_products(workspace_id: str, query: str = "", category: Optional[str] 
         is_women = check_is_women_product(p)
         if is_men_query and not is_women_query and is_women and "men" not in full_text and "couple" not in full_text:
             continue
-        if is_womenQuery := is_women_query and not is_men_query and not is_women:
+        if is_women_query and not is_men_query and not is_women:
             continue
 
         # Explicit Category
@@ -741,7 +740,7 @@ def search_products(workspace_id: str, query: str = "", category: Optional[str] 
     # Hybrid Scoring
     query_vec = generate_embedding(query_for_scoring) if query_for_scoring else None
 
-    def compute_score(p: Dict[str, Any]) -> float:
+    def compute_score(p: dict[str, Any]) -> float:
         lexical = 0.0
         t_low = p.get("title", "").lower()
         d_low = p.get("description", "").lower()
@@ -878,15 +877,15 @@ def search_products(workspace_id: str, query: str = "", category: Optional[str] 
 # 6. COMMERCE TOOLS IMPLEMENTATION
 # ============================================================================
 
-def get_inventory(workspace_id: str, product_id: str, variant_id: Optional[str] = None, size: Optional[str] = None, color: Optional[str] = None) -> Dict[str, Any]:
+def get_inventory(workspace_id: str, product_id: str, variant_id: str | None = None, size: str | None = None, color: str | None = None) -> dict[str, Any]:
     prods = get_tenant_products_sync(workspace_id)
     target = next((p for p in prods if p["id"] == product_id), None)
     if not target:
         return GetInventoryOutput(product_id=product_id, in_stock=False, message=f"Product '{product_id}' not found").model_dump()
 
     variants = target.get("variants", [])
-    sizes = list(set(v.get("attributes", {}).get("size") for v in variants if v.get("attributes", {}).get("size") and v.get("inventory_quantity", 0) > 0))
-    colors = list(set(v.get("attributes", {}).get("color") for v in variants if v.get("attributes", {}).get("color") and v.get("inventory_quantity", 0) > 0))
+    sizes = list({v.get("attributes", {}).get("size") for v in variants if v.get("attributes", {}).get("size") and v.get("inventory_quantity", 0) > 0})
+    colors = list({v.get("attributes", {}).get("color") for v in variants if v.get("attributes", {}).get("color") and v.get("inventory_quantity", 0) > 0})
 
     stock_count = target.get("total_inventory", 0)
     in_stock = target.get("in_stock", True) and stock_count > 0
@@ -906,11 +905,11 @@ def get_inventory(workspace_id: str, product_id: str, variant_id: Optional[str] 
         message=f"{target['title']} is {'IN STOCK' if in_stock else 'OUT OF STOCK'} ({stock_count} units available)."
     ).model_dump()
 
-def check_inventory(workspace_id: str, product_id: str, **kwargs) -> Dict[str, Any]:
+def check_inventory(workspace_id: str, product_id: str, **kwargs) -> dict[str, Any]:
     return get_inventory(workspace_id, product_id, **kwargs)
 
 
-def lookup_order(workspace_id: str, order_number: str, customer_email: str) -> Dict[str, Any]:
+def lookup_order(workspace_id: str, order_number: str, customer_email: str) -> dict[str, Any]:
     if not customer_email or not customer_email.strip():
         return OrderLookupOutput(found=False, error="Customer email is required for secure order verification").model_dump()
 
@@ -920,11 +919,11 @@ def lookup_order(workspace_id: str, order_number: str, customer_email: str) -> D
 
     return OrderLookupOutput(found=True, order=order).model_dump()
 
-def order_lookup(workspace_id: str, order_number: str, customer_email: str) -> Dict[str, Any]:
+def order_lookup(workspace_id: str, order_number: str, customer_email: str) -> dict[str, Any]:
     return lookup_order(workspace_id, order_number, customer_email)
 
 
-def order_tracking(workspace_id: str, order_number: str, customer_email: Optional[str] = None) -> Dict[str, Any]:
+def order_tracking(workspace_id: str, order_number: str, customer_email: str | None = None) -> dict[str, Any]:
     order = get_tenant_order_sync(workspace_id, order_number, customer_email or "sarah.connor@example.com")
     if not order:
         return OrderTrackingOutput(found=False, order_number=order_number).model_dump()
@@ -941,7 +940,7 @@ def order_tracking(workspace_id: str, order_number: str, customer_email: Optiona
     ).model_dump()
 
 
-def coupon_validation(workspace_id: str, coupon_code: Optional[str] = None, cart_subtotal: Optional[float] = None, code: Optional[str] = None, subtotal: Optional[float] = None, order_total: Optional[float] = None, **kwargs) -> Dict[str, Any]:
+def coupon_validation(workspace_id: str, coupon_code: str | None = None, cart_subtotal: float | None = None, code: str | None = None, subtotal: float | None = None, order_total: float | None = None, **kwargs) -> dict[str, Any]:
     c_code = coupon_code or code or kwargs.get("coupon_code") or kwargs.get("code") or ""
     c_subtotal = cart_subtotal if cart_subtotal is not None else subtotal if subtotal is not None else order_total if order_total is not None else kwargs.get("cart_subtotal", 0.0)
     code_u = str(c_code).strip().upper()
@@ -971,11 +970,11 @@ def coupon_validation(workspace_id: str, coupon_code: Optional[str] = None, cart
         message=f"Coupon code '{code_u}' is invalid or expired."
     ).model_dump()
 
-def apply_discount(workspace_id: str, code: Optional[str] = None, subtotal: Optional[float] = None, **kwargs) -> Dict[str, Any]:
+def apply_discount(workspace_id: str, code: str | None = None, subtotal: float | None = None, **kwargs) -> dict[str, Any]:
     return coupon_validation(workspace_id, coupon_code=code, cart_subtotal=subtotal, **kwargs)
 
 
-def return_eligibility(workspace_id: str, order_number: str, customer_email: Optional[str] = None, product_id: Optional[str] = None) -> Dict[str, Any]:
+def return_eligibility(workspace_id: str, order_number: str, customer_email: str | None = None, product_id: str | None = None) -> dict[str, Any]:
     return ReturnEligibilityOutput(
         eligible=True,
         order_number=order_number,
@@ -985,7 +984,7 @@ def return_eligibility(workspace_id: str, order_number: str, customer_email: Opt
     ).model_dump()
 
 
-def create_return(workspace_id: str, order_number: str, customer_email: str, product_id: Optional[str] = None, reason: str = "Size exchange") -> Dict[str, Any]:
+def create_return(workspace_id: str, order_number: str, customer_email: str, product_id: str | None = None, reason: str = "Size exchange") -> dict[str, Any]:
     ret_id = f"ret_{uuid.uuid4().hex[:8]}"
     return CreateReturnOutput(
         success=True,
@@ -997,7 +996,7 @@ def create_return(workspace_id: str, order_number: str, customer_email: str, pro
     ).model_dump()
 
 
-def add_to_cart(workspace_id: str, product_id: str, quantity: int = 1, variant_id: Optional[str] = None, size: Optional[str] = None, color: Optional[str] = None, cart_id: Optional[str] = None) -> Dict[str, Any]:
+def add_to_cart(workspace_id: str, product_id: str, quantity: int = 1, variant_id: str | None = None, size: str | None = None, color: str | None = None, cart_id: str | None = None) -> dict[str, Any]:
     prods = get_tenant_products_sync(workspace_id)
     target = next((p for p in prods if p["id"] == product_id), None)
     if not target:
@@ -1020,7 +1019,7 @@ def add_to_cart(workspace_id: str, product_id: str, quantity: int = 1, variant_i
     ).model_dump()
 
 
-def cart_lookup(workspace_id: str, cart_id: Optional[str] = None, items: Optional[List[Dict[str, Any]]] = None, discount_code: Optional[str] = None, **kwargs) -> Dict[str, Any]:
+def cart_lookup(workspace_id: str, cart_id: str | None = None, items: list[dict[str, Any]] | None = None, discount_code: str | None = None, **kwargs) -> dict[str, Any]:
     c_id = cart_id or f"cart_{uuid.uuid4().hex[:10]}"
     prods = get_tenant_products_sync(workspace_id)
 
@@ -1069,11 +1068,11 @@ def cart_lookup(workspace_id: str, cart_id: Optional[str] = None, items: Optiona
         discount_applied=disc_applied
     ).model_dump()
 
-def calculate_cart(workspace_id: str, items: List[Dict[str, Any]], discount_code: Optional[str] = None) -> Dict[str, Any]:
+def calculate_cart(workspace_id: str, items: list[dict[str, Any]], discount_code: str | None = None) -> dict[str, Any]:
     return cart_lookup(workspace_id, items=items, discount_code=discount_code)
 
 
-def human_handoff(workspace_id: str, reason: str = "Customer requested human support", customer_email: Optional[str] = None, summary: Optional[str] = None) -> Dict[str, Any]:
+def human_handoff(workspace_id: str, reason: str = "Customer requested human support", customer_email: str | None = None, summary: str | None = None) -> dict[str, Any]:
     ticket = f"tkt_{uuid.uuid4().hex[:8]}"
     return HumanHandoffOutput(
         status="ESCALATED",
@@ -1087,7 +1086,7 @@ def human_handoff(workspace_id: str, reason: str = "Customer requested human sup
 # 7. DYNAMIC TOOL DISPATCHER
 # ============================================================================
 
-def execute_typed_tool(tool_name: str, arguments: Dict[str, Any], workspace_id: str, **kwargs) -> Dict[str, Any]:
+def execute_typed_tool(tool_name: str, arguments: dict[str, Any], workspace_id: str, **kwargs) -> dict[str, Any]:
     """Executes a tool call with strict typing, tenant isolation, and schema validation."""
     if not workspace_id:
         raise ValueError("workspace_id is mandatory for tool execution")

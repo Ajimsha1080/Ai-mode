@@ -1,15 +1,23 @@
-import json
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from .models import (
-    WorkspaceModel, UserModel, WorkspaceMemberModel,
-    AgentModel, AgentConfigModel, AgentPolicyModel,
-    KnowledgeSourceModel, KnowledgeDocModel, KnowledgeChunkModel,
-    ProductModel, OrderModel, ToolModel, IntegrationModel
+    AgentConfigModel,
+    AgentModel,
+    KnowledgeChunkModel,
+    KnowledgeDocModel,
+    KnowledgeSourceModel,
+    OrderModel,
+    ProductModel,
+    UserModel,
+    WorkspaceMemberModel,
+    WorkspaceModel,
 )
 
+
 def generate_embedding_128(text: str):
-    import math, re
+    import math
+    import re
     dim = 128
     embedding = [0.0] * dim
     clean = re.sub(r'[^a-z0-9\s]', ' ', text.lower())

@@ -1,12 +1,12 @@
-import sys
 import os
+import sys
 
 os.environ["APP_ENV"] = "development"
 
+
 import jwt
-from typing import Dict, Any
-from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 
 # Generate RS256 test keypair
 test_private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -29,12 +29,13 @@ if sys.platform == 'win32':
 # Add directory to python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from app.rag import execute_rag_pipeline
-from app.agent_runtime import run_agent_cycle
-from app.auth import decode_token, verify_service_jwt, get_service_public_key
-from app.db.database import init_db
 import asyncio
 import time
+
+from app.agent_runtime import run_agent_cycle
+from app.auth import verify_service_jwt
+from app.db.database import init_db
+
 
 def generate_test_jwt(workspace_id: str, role: str = "ADMIN") -> str:
     payload = {
@@ -56,7 +57,7 @@ def test():
     print("========================================================")
     print("RUNNING PYTHON BACKEND HARDENING & TENANCY SUITE")
     print("========================================================")
-    
+
     # 1. Test JWT Verification & Tenancy Extraction
     print("\n[TEST 1] Service JWT Token Verification & Claim Extraction...")
     valid_token = generate_test_jwt("ws_acme_corp")

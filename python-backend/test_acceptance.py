@@ -1,11 +1,11 @@
-import os
-import sys
-import jwt
 import asyncio
-import unittest
+import os
 import time
-from cryptography.hazmat.primitives.asymmetric import rsa
+import unittest
+
+import jwt
 from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 
 # Generate RS256 test keypair
 test_private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -22,11 +22,18 @@ TEST_PUBLIC_PEM = test_private_key.public_key().public_bytes(
 os.environ["SERVICE_JWT_PUBLIC_KEY"] = TEST_PUBLIC_PEM
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./test_acceptance.db"
 
-from app.auth import decode_token, verify_service_jwt, get_service_public_key, DISALLOWED_DEFAULT_SECRETS
-from app.tools import lookup_order, _fetch_order_db
-from app.rag import execute_rag_pipeline
-from app.db.database import init_db
 from fastapi import HTTPException
+
+from app.auth import (
+    DISALLOWED_DEFAULT_SECRETS,
+    decode_token,
+    get_service_public_key,
+    verify_service_jwt,
+)
+from app.db.database import init_db
+from app.rag import execute_rag_pipeline
+from app.tools import lookup_order
+
 
 class TestAcceptanceHardening(unittest.TestCase):
     @classmethod

@@ -1,9 +1,10 @@
-import re
 import json
+import logging
+import re
 import time
 import uuid
-import logging
-from typing import Any, Dict, Optional
+from typing import Any
+
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
@@ -64,19 +65,19 @@ class StructuredJsonFormatter(logging.Formatter):
             "message": redact_pii(record.getMessage()),
         }
         if hasattr(record, "request_id"):
-            log_obj["request_id"] = getattr(record, "request_id")
+            log_obj["request_id"] = record.request_id
         if hasattr(record, "trace_id"):
-            log_obj["trace_id"] = getattr(record, "trace_id")
+            log_obj["trace_id"] = record.trace_id
         if hasattr(record, "workspace_id"):
-            log_obj["workspace_id"] = getattr(record, "workspace_id")
+            log_obj["workspace_id"] = record.workspace_id
         if hasattr(record, "duration_ms"):
-            log_obj["duration_ms"] = getattr(record, "duration_ms")
+            log_obj["duration_ms"] = record.duration_ms
         if hasattr(record, "status_code"):
-            log_obj["status_code"] = getattr(record, "status_code")
+            log_obj["status_code"] = record.status_code
         if hasattr(record, "method"):
-            log_obj["method"] = getattr(record, "method")
+            log_obj["method"] = record.method
         if hasattr(record, "path"):
-            log_obj["path"] = getattr(record, "path")
+            log_obj["path"] = record.path
         if record.exc_info:
             log_obj["exception"] = self.formatException(record.exc_info)
         return json.dumps(log_obj)
@@ -94,12 +95,12 @@ if not logger.handlers:
 # ---------------------------------------------------------------------------
 
 class TraceContext:
-    def __init__(self, trace_id: Optional[str] = None, span_id: Optional[str] = None):
+    def __init__(self, trace_id: str | None = None, span_id: str | None = None):
         self.trace_id = trace_id or uuid.uuid4().hex
         self.span_id = span_id or uuid.uuid4().hex[:16]
 
     @classmethod
-    def from_headers(cls, headers: Dict[str, str]) -> "TraceContext":
+    def from_headers(cls, headers: dict[str, str]) -> "TraceContext":
         # W3C traceparent support: version-trace_id-parent_id-flags
         traceparent = headers.get("traceparent") or headers.get("x-trace-id")
         if traceparent and traceparent.startswith("00-"):
@@ -143,7 +144,7 @@ class ObservabilityMiddleware(BaseHTTPMiddleware):
             "status_code": response.status_code,
             "duration_ms": duration_ms
         }
-        
+
         # Don't clutter logs with high-frequency health probes
         if clean_path not in ("/health", "/healthz", "/ready", "/readyz"):
             logger.info(

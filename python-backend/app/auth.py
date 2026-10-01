@@ -1,9 +1,10 @@
-import os
 import base64
+import os
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Any
+
 import jwt
-from fastapi import Header, HTTPException, Depends
+from fastapi import Depends, Header, HTTPException
 
 DISALLOWED_DEFAULT_SECRETS = [
     "super_secret_jwt_key_enterprise_grade_aaas_platform_2026",
@@ -36,10 +37,10 @@ def get_service_public_key() -> str:
         os.getenv("SERVICE_JWT_PUBLIC_KEY")
         or os.getenv("SERVICE_JWT_PUBLIC_KEY_PEM")
     )
-    
+
     if raw and os.path.exists(raw):
         try:
-            with open(raw, "r", encoding="utf-8") as f:
+            with open(raw, encoding="utf-8") as f:
                 raw = f.read()
         except Exception:
             pass
@@ -50,7 +51,7 @@ def get_service_public_key() -> str:
             dev_key_path = Path(__file__).resolve().parent.parent.parent / "data" / ".keys" / "service_rs256_public.pem"
             if dev_key_path.exists():
                 try:
-                    with open(dev_key_path, "r", encoding="utf-8") as f:
+                    with open(dev_key_path, encoding="utf-8") as f:
                         return f.read().strip()
                 except Exception:
                     pass
@@ -71,7 +72,7 @@ get_service_secret = get_service_public_key
 
 ALLOWED_ALGORITHMS = ["RS256", "EdDSA"]
 
-def decode_token(token: str) -> Dict[str, Any]:
+def decode_token(token: str) -> dict[str, Any]:
     public_key = get_service_public_key()
     app_env = (os.getenv("APP_ENV") or os.getenv("NODE_ENV") or os.getenv("ENVIRONMENT") or "").lower()
 
@@ -80,7 +81,7 @@ def decode_token(token: str) -> Dict[str, Any]:
         try:
             return jwt.decode(token, options={"verify_signature": False, "verify_aud": False, "verify_iss": False})
         except Exception as e:
-            raise HTTPException(status_code=401, detail=f"Invalid service token: {str(e)}")
+            raise HTTPException(status_code=401, detail=f"Invalid service token: {str(e)}") from e
 
     try:
         payload = jwt.decode(
@@ -98,12 +99,12 @@ def decode_token(token: str) -> Dict[str, Any]:
             }
         )
         return payload
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Service token has expired")
+    except jwt.ExpiredSignatureError as e:
+        raise HTTPException(status_code=401, detail="Service token has expired") from e
     except (jwt.InvalidTokenError, jwt.InvalidAudienceError, jwt.InvalidIssuerError) as e:
-        raise HTTPException(status_code=401, detail=f"Invalid asymmetric service token: {str(e)}")
+        raise HTTPException(status_code=401, detail=f"Invalid asymmetric service token: {str(e)}") from e
 
-def verify_service_jwt(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+def verify_service_jwt(authorization: str | None = Header(None)) -> dict[str, Any]:
     """
     Strict Asymmetric Service-to-Service JWT Verification (RS256).
     Derives workspace_id ONLY from verified token claims signed by Next.js.
@@ -114,17 +115,17 @@ def verify_service_jwt(authorization: Optional[str] = Header(None)) -> Dict[str,
             status_code=401,
             detail="Authorization header with Bearer service token is required"
         )
-    
+
     token = authorization.split(" ", 1)[1].strip()
     payload = decode_token(token)
-    
+
     workspace_id = payload.get("workspace_id") or payload.get("workspaceId")
     if not workspace_id:
         raise HTTPException(
             status_code=401,
             detail="Forbidden: JWT missing required 'workspace_id' claim"
         )
-    
+
     role = payload.get("role", "MEMBER")
     is_super_admin = bool(payload.get("isSuperAdmin") is True or role == "SUPERADMIN")
 
@@ -135,7 +136,7 @@ def verify_service_jwt(authorization: Optional[str] = Header(None)) -> Dict[str,
         "is_super_admin": is_super_admin
     }
 
-def require_admin_auth(claims: Dict[str, Any] = Depends(verify_service_jwt)) -> Dict[str, Any]:
+def require_admin_auth(claims: dict[str, Any] = Depends(verify_service_jwt)) -> dict[str, Any]:
     """Requires verified admin privileges or super-admin claims."""
     if not claims.get("is_super_admin") and claims.get("role") not in ["OWNER", "ADMIN", "SUPERADMIN"]:
         raise HTTPException(
@@ -146,10 +147,10 @@ def require_admin_auth(claims: Dict[str, Any] = Depends(verify_service_jwt)) -> 
 
 
 async def resolve_agent_chat_auth(
-    authorization: Optional[str] = Header(None),
-    origin: Optional[str] = Header(None),
-    referer: Optional[str] = Header(None)
-) -> Dict[str, Any]:
+    authorization: str | None = Header(None),
+    origin: str | None = Header(None),
+    referer: str | None = Header(None)
+) -> dict[str, Any]:
     """
     Unified authentication resolver for chat endpoints:
     1. Asymmetric Service JWT (signed by Next.js BFF proxy)
@@ -166,9 +167,10 @@ async def resolve_agent_chat_auth(
 
     # Public deployment key check
     if token.startswith("pk_live_") or token.startswith("dep_"):
+        from sqlalchemy import select
+
         from .db.database import async_session_factory
         from .db.models import DeploymentModel
-        from sqlalchemy import select
 
         async with async_session_factory() as session:
             stmt = select(DeploymentModel).where(

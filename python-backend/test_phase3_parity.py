@@ -1,40 +1,30 @@
-import os
-import sys
-import pytest
 import asyncio
-from typing import Dict, Any
+import os
+
+import pytest
 
 from app.db.database import init_db
 from app.rag import (
-    EmbeddingProvider,
-    LocalDeterministicEmbeddingProvider,
-    OpenAIEmbeddingProvider,
-    OllamaEmbeddingProvider,
-    get_embedding_provider,
     BM25Retriever,
+    LocalDeterministicEmbeddingProvider,
     execute_rag_pipeline,
-    generate_embedding,
-    cosine_similarity
 )
 from app.tools import (
-    search_products,
-    get_inventory,
-    order_lookup,
-    order_tracking,
-    coupon_validation,
-    return_eligibility,
-    create_return,
+    TYPO_MAP,
     add_to_cart,
     cart_lookup,
+    coupon_validation,
+    create_return,
+    get_inventory,
     human_handoff,
-    execute_typed_tool,
+    order_lookup,
+    order_tracking,
     parse_search_query,
+    return_eligibility,
+    search_products,
     stem_word,
-    TYPO_MAP,
-    SearchProductsInput,
-    GetInventoryInput,
-    OrderLookupInput
 )
+
 
 @pytest.fixture(scope="module", autouse=True)
 def setup_database():

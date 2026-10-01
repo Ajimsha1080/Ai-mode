@@ -5,14 +5,14 @@ Revises: 20261002_0001
 Create Date: 2026-10-02 01:45:00.000000
 
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
+
 from alembic import op
-import sqlalchemy as sa
 
 revision: str = '20261002_0002'
-down_revision: Union[str, None] = '20261002_0001'
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = '20261002_0001'
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 TENANT_TABLES = [
     "workspace_members", "agents", "agent_configs", "agent_versions",
@@ -60,16 +60,16 @@ def upgrade() -> None:
                 USING (
                     (current_setting('app.is_super_admin', true) = 'true')
                     OR (
-                        workspace_id IS NOT NULL 
-                        AND workspace_id <> '' 
+                        workspace_id IS NOT NULL
+                        AND workspace_id <> ''
                         AND workspace_id = NULLIF(current_setting('app.current_tenant_id', true), '')
                     )
                 )
                 WITH CHECK (
                     (current_setting('app.is_super_admin', true) = 'true')
                     OR (
-                        workspace_id IS NOT NULL 
-                        AND workspace_id <> '' 
+                        workspace_id IS NOT NULL
+                        AND workspace_id <> ''
                         AND workspace_id = NULLIF(current_setting('app.current_tenant_id', true), '')
                     )
                 );

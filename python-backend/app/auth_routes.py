@@ -1,22 +1,21 @@
 import uuid
-import time
-from typing import Dict, Any, Optional
-from fastapi import APIRouter, HTTPException, Depends, Header, Request, status
-from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 
-from .db.database import get_db_session
-from .db.models import UserModel, WorkspaceModel, WorkspaceMemberModel, AgentModel, AgentConfigModel
+from fastapi import APIRouter, Depends, Header, HTTPException, status
+from pydantic import BaseModel, EmailStr
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from .auth_service import (
-    hash_password,
-    verify_password,
-    create_session_jwt,
-    verify_session_jwt,
     check_login_rate_limit,
+    create_session_jwt,
+    hash_password,
     record_failed_login,
-    reset_login_attempts
+    reset_login_attempts,
+    verify_password,
+    verify_session_jwt,
 )
+from .db.database import get_db_session
+from .db.models import AgentConfigModel, AgentModel, UserModel, WorkspaceMemberModel, WorkspaceModel
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
@@ -28,7 +27,7 @@ class SignupRequest(BaseModel):
     email: EmailStr
     password: str
     name: str
-    workspace_name: Optional[str] = "My Store"
+    workspace_name: str | None = "My Store"
 
 class ForgotPasswordRequest(BaseModel):
     email: EmailStr
@@ -46,7 +45,7 @@ async def login_endpoint(
     session: AsyncSession = Depends(get_db_session)
 ):
     clean_email = req.email.lower().strip()
-    
+
     # 1. Rate Limiting Check
     allowed, retry_after = check_login_rate_limit(clean_email)
     if not allowed:
@@ -179,7 +178,7 @@ async def signup_endpoint(
 
 @router.get("/me")
 async def me_endpoint(
-    authorization: Optional[str] = Header(None),
+    authorization: str | None = Header(None),
     session: AsyncSession = Depends(get_db_session)
 ):
     if not authorization or not authorization.startswith("Bearer "):

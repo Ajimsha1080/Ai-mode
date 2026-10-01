@@ -15,7 +15,7 @@ export async function GET(req: Request) {
 
     const pyRes = await fetch(`${PYTHON_BACKEND_URL}/api/v1/auth/me`, {
       headers: {
-        'Authorization': authHeader.startsWith('Bearer ') ? authHeader : `Bearer ${session.token || ''}`,
+        'Authorization': authHeader.startsWith('Bearer ') ? authHeader : '',
         'Cookie': cookieHeader
       },
       signal: AbortSignal.timeout(5000)

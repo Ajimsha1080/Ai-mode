@@ -1,25 +1,46 @@
-import os
-import json
 import asyncio
+import json
+import os
+import time
+from collections import defaultdict
 from contextlib import asynccontextmanager
-from typing import Optional, List, Dict, Any
-from fastapi import FastAPI, HTTPException, Header, Depends, Query
+from typing import Any
+
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .models import ChatRequest, ChatResponse, RAGQueryRequest, KnowledgeIngestRequest
 from .agent_runtime import run_agent_cycle
-from .rag import execute_rag_pipeline
-from .tools import lookup_order
-from .db.database import init_db, get_db_session
-from .db.repository import DatabaseRepository
-from .auth import verify_service_jwt, require_admin_auth
-from .llm import LLMClient
-from .observability import ObservabilityMiddleware
-from .audit import record_audit_log, get_tenant_audit_logs
+from .audit import get_tenant_audit_logs, record_audit_log
+from .auth import require_admin_auth, resolve_agent_chat_auth, verify_service_jwt
 from .auth_routes import router as auth_router
 from .connectors import router as connectors_router
+from .db.database import get_db_session, init_db
+from .db.repository import DatabaseRepository
+from .llm import LLMClient
+from .models import ChatRequest, ChatResponse, KnowledgeIngestRequest, RAGQueryRequest
+from .observability import ObservabilityMiddleware
+from .rag import execute_rag_pipeline, fetch_tenant_chunks_from_db
+from .rate_limiter import rate_limiter
+from .tools import _fetch_order_db
+
+_order_rate_limit_store: dict[str, list[float]] = defaultdict(list)
+
+
+def check_order_rate_limit(client_ip: str, workspace_id: str, limit: int = 10, window_sec: int = 60):
+    key = f"{client_ip}:{workspace_id}"
+    now = time.time()
+    timestamps = [ts for ts in _order_rate_limit_store[key] if now - ts < window_sec]
+    if len(timestamps) >= limit:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many order lookup attempts. Please wait before retrying."
+        )
+    timestamps.append(now)
+    _order_rate_limit_store[key] = timestamps
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -63,10 +84,9 @@ def health_check():
 @app.get("/readyz")
 async def readiness_check(session: AsyncSession = Depends(get_db_session)):
     try:
-        from sqlalchemy import text
         await session.execute(text("SELECT 1"))
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Database not ready: {str(e)}")
+        raise HTTPException(status_code=503, detail=f"Database not ready: {str(e)}") from e
 
     client = LLMClient()
     app_env = os.getenv("APP_ENV", "development").lower()
@@ -85,7 +105,7 @@ async def readiness_check(session: AsyncSession = Depends(get_db_session)):
 
 @app.get("/api/v1/db/status")
 async def get_db_status(
-    admin_claims: Dict[str, Any] = Depends(require_admin_auth),
+    admin_claims: dict[str, Any] = Depends(require_admin_auth),
     session: AsyncSession = Depends(get_db_session)
 ):
     """Returns the live status of the Enterprise Database (Protected: Admin/Service Token Required)."""
@@ -104,7 +124,7 @@ async def get_db_status(
 async def get_audit_logs(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    admin_claims: Dict[str, Any] = Depends(require_admin_auth)
+    admin_claims: dict[str, Any] = Depends(require_admin_auth)
 ):
     """Retrieve audit logs for admin actions scoped strictly to the authenticated workspace."""
     workspace_id = admin_claims["workspace_id"]
@@ -112,8 +132,8 @@ async def get_audit_logs(
 
 @app.post("/api/v1/audit/logs")
 async def create_audit_log_entry(
-    payload: Dict[str, Any],
-    admin_claims: Dict[str, Any] = Depends(require_admin_auth)
+    payload: dict[str, Any],
+    admin_claims: dict[str, Any] = Depends(require_admin_auth)
 ):
     """Record an administrative audit log entry with PII redaction."""
     workspace_id = admin_claims["workspace_id"]
@@ -128,15 +148,12 @@ async def create_audit_log_entry(
     )
     return entry
 
-from .rate_limiter import rate_limiter
-from .auth import verify_service_jwt, require_admin_auth, resolve_agent_chat_auth
-
 
 @app.post("/api/v1/agents/{agent_id}/chat", response_model=ChatResponse)
 async def chat_agent(
     agent_id: str,
     req: ChatRequest,
-    claims: Dict[str, Any] = Depends(resolve_agent_chat_auth)
+    claims: dict[str, Any] = Depends(resolve_agent_chat_auth)
 ):
     """
     Executes a full multi-step agent reasoning cycle with 12-stage RAG and tools.
@@ -144,97 +161,108 @@ async def chat_agent(
     CPU-heavy work is offloaded to a worker thread outside the async event loop.
     """
     token_workspace_id = claims["workspace_id"]
-    if req.workspace_id and req.workspace_id != token_workspace_id and claims.get("role") != "SUPERADMIN":
-        raise HTTPException(status_code=403, detail="Forbidden: Cross-tenant workspace mismatch")
-
-    # Rate limit check per tenant
-    allowed, remaining, retry_after = rate_limiter.check_rate_limit(token_workspace_id)
-    if not allowed:
+    if req.workspace_id and req.workspace_id != token_workspace_id and claims.get("role") != "SUPER_ADMIN":
         raise HTTPException(
-            status_code=429,
-            detail=f"Rate limit exceeded for workspace. Please retry in {retry_after} seconds."
+            status_code=403,
+            detail=f"Forbidden: Token workspace ({token_workspace_id}) does not match requested workspace ({req.workspace_id})"
         )
 
+    # Enforce Redis-backed per-tenant rate limits and monthly quotas
+    await rate_limiter.check_rate_limit(token_workspace_id)
+
+    target_ws = req.workspace_id or token_workspace_id
+
     try:
-        # Offload CPU work (embedding generation, ranking, tool execution) to thread pool
+        # Offload synchronous/CPU-heavy agent execution to thread pool
         result = await asyncio.to_thread(
             run_agent_cycle,
             agent_id=agent_id,
             message=req.message,
+            workspace_id=target_ws,
             conversation_id=req.conversation_id,
-            workspace_id=token_workspace_id
+            session_id=req.session_id,
+            customer_email=req.customer_email,
+            context=req.context
         )
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 @app.post("/api/v1/agents/{agent_id}/chat/stream")
-async def chat_agent_stream(
+async def stream_chat_agent(
     agent_id: str,
     req: ChatRequest,
-    claims: Dict[str, Any] = Depends(resolve_agent_chat_auth)
+    claims: dict[str, Any] = Depends(resolve_agent_chat_auth)
 ):
+    """
+    Streams the agent reasoning cycle token-by-token using Server-Sent Events (SSE).
+    """
     token_workspace_id = claims["workspace_id"]
-    if req.workspace_id and req.workspace_id != token_workspace_id and claims.get("role") != "SUPERADMIN":
+    if req.workspace_id and req.workspace_id != token_workspace_id and claims.get("role") != "SUPER_ADMIN":
         raise HTTPException(status_code=403, detail="Forbidden: Cross-tenant workspace mismatch")
 
-    # Rate limit check per tenant
-    allowed, remaining, retry_after = rate_limiter.check_rate_limit(token_workspace_id)
-    if not allowed:
-        raise HTTPException(
-            status_code=429,
-            detail=f"Rate limit exceeded for workspace. Please retry in {retry_after} seconds."
-        )
+    # Enforce Redis-backed per-tenant rate limits and monthly quotas
+    await rate_limiter.check_rate_limit(token_workspace_id)
+
+    target_ws = req.workspace_id or token_workspace_id
 
     async def event_generator():
-        # Offload CPU work to thread pool
+        # Yield initial connected event
+        yield f"event: connect\ndata: {json.dumps({'status': 'CONNECTED', 'workspace_id': target_ws})}\n\n"
+
+        # Execute cycle in threadpool to prevent event loop blocking
         result = await asyncio.to_thread(
             run_agent_cycle,
             agent_id=agent_id,
             message=req.message,
+            workspace_id=target_ws,
             conversation_id=req.conversation_id,
-            workspace_id=token_workspace_id
+            session_id=req.session_id,
+            customer_email=req.customer_email,
+            context=req.context
         )
 
-        yield f"event: stage\ndata: {json.dumps({'stage': 'INTENT_UNDERSTANDING', 'intent': result.get('intent')})}\n\n"
-        await asyncio.sleep(0.01)
-
-        if result.get("trace", {}).get("retrieved_citations"):
-            yield f"event: stage\ndata: {json.dumps({'stage': 'RAG_RETRIEVAL', 'citations': len(result['trace']['retrieved_citations'])})}\n\n"
-            await asyncio.sleep(0.01)
-
-        full_text = result.get("response", "")
-        words = full_text.split(" ")
+        # Stream the full tokens
+        response_text = result.get("response", "")
+        # Stream in simulated natural chunks
+        words = response_text.split(" ")
         for i, word in enumerate(words):
             chunk = word + (" " if i < len(words) - 1 else "")
             yield f"event: token\ndata: {json.dumps({'token': chunk})}\n\n"
             await asyncio.sleep(0.01)
 
+        # Final structured payload event
         yield f"event: done\ndata: {json.dumps(result)}\n\n"
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
 
 @app.post("/api/v1/rag/query")
 async def query_rag_pipeline(
     req: RAGQueryRequest,
-    claims: Dict[str, Any] = Depends(verify_service_jwt)
+    claims: dict[str, Any] = Depends(verify_service_jwt)
 ):
     token_workspace_id = claims["workspace_id"]
     if req.workspace_id and req.workspace_id != token_workspace_id and claims.get("role") != "SUPER_ADMIN":
         raise HTTPException(status_code=403, detail="Forbidden: Cross-tenant workspace mismatch")
 
     try:
-        from .rag import fetch_tenant_chunks_from_db
         chunks = await fetch_tenant_chunks_from_db(token_workspace_id)
         return execute_rag_pipeline(req.question, workspace_id=token_workspace_id, tenant_chunks=chunks, top_k=req.top_k or 3)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 @app.post("/api/v1/knowledge/ingest")
 async def ingest_knowledge_endpoint(
     req: KnowledgeIngestRequest,
-    claims: Dict[str, Any] = Depends(verify_service_jwt),
+    claims: dict[str, Any] = Depends(verify_service_jwt),
     session: AsyncSession = Depends(get_db_session)
 ):
     token_workspace_id = claims["workspace_id"]
@@ -242,12 +270,12 @@ async def ingest_knowledge_endpoint(
         raise HTTPException(status_code=403, detail="Forbidden: Cross-tenant workspace mismatch")
 
     target_ws = req.workspace_id or token_workspace_id
-    
+
     # Split content into distinct paragraphs/chunks
     raw_chunks = [c.strip() for c in req.content.split("\n\n") if c.strip()]
     if not raw_chunks:
         raw_chunks = [req.content]
-    
+
     chunks_data = []
     for rc in raw_chunks:
         chunks_data.append({
@@ -271,36 +299,17 @@ async def ingest_knowledge_endpoint(
         "workspace_id": target_ws
     }
 
-import time
-from collections import defaultdict
-from fastapi import Request
-
-_order_rate_limit_store = defaultdict(list)
-
-def check_order_rate_limit(client_ip: str, workspace_id: str, limit: int = 10, window_sec: int = 60):
-    key = f"{client_ip}:{workspace_id}"
-    now = time.time()
-    timestamps = [ts for ts in _order_rate_limit_store[key] if now - ts < window_sec]
-    if len(timestamps) >= limit:
-        raise HTTPException(
-            status_code=429,
-            detail="Too many order lookup attempts. Please wait before retrying."
-        )
-    timestamps.append(now)
-    _order_rate_limit_store[key] = timestamps
-
 @app.get("/api/v1/orders/{order_number}")
 async def get_order_endpoint(
     order_number: str,
     request: Request,
     customer_email: str = Query(..., description="Customer email for verification"),
-    claims: Dict[str, Any] = Depends(verify_service_jwt)
+    claims: dict[str, Any] = Depends(verify_service_jwt)
 ):
     workspace_id = claims["workspace_id"]
     client_ip = request.client.host if request.client else "unknown_ip"
     check_order_rate_limit(client_ip, workspace_id)
 
-    from .tools import _fetch_order_db
     order = await _fetch_order_db(workspace_id, order_number, customer_email)
     if not order:
         raise HTTPException(status_code=404, detail=f"Order '{order_number}' not found with the provided email address.")

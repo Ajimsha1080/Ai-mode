@@ -37,10 +37,15 @@ select = [
     "UP",  # pyupgrade
 ]
 ignore = [
-    "E501", # line length handled by black/ruff format
+    "E501", # line length handled by formatter
     "B008", # do not perform function calls in argument defaults (FastAPI Depends)
     "C901", # complexity
 ]
+
+[tool.ruff.lint.per-file-ignores]
+"test_*.py" = ["E402", "B011", "B017", "F841", "B905"]
+"test_evals.py" = ["E402", "B011", "B017", "F841"]
+"alembic/*" = ["E402", "F401"]
 
 [tool.ruff.format]
 quote-style = "double"

@@ -1,8 +1,11 @@
 import time
 import uuid
-from typing import Dict, Any, List, Optional
+from typing import Any
+
 from pydantic import BaseModel, Field
+
 from .observability import redact_pii
+
 
 class AuditLogEntry(BaseModel):
     id: str = Field(default_factory=lambda: f"aud_{uuid.uuid4().hex[:12]}")
@@ -11,12 +14,12 @@ class AuditLogEntry(BaseModel):
     action: str
     resource_type: str
     resource_id: str
-    metadata: Dict[str, Any] = Field(default_factory=dict)
-    ip_address: Optional[str] = "127.0.0.1"
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    ip_address: str | None = "127.0.0.1"
     created_at: str = Field(default_factory=lambda: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
 
 # In-memory tenant-partitioned audit log buffer with database synchronization
-_AUDIT_LOG_STORE: List[Dict[str, Any]] = []
+_AUDIT_LOG_STORE: list[dict[str, Any]] = []
 
 def record_audit_log(
     workspace_id: str,
@@ -24,9 +27,9 @@ def record_audit_log(
     action: str,
     resource_type: str,
     resource_id: str,
-    metadata: Optional[Dict[str, Any]] = None,
-    ip_address: Optional[str] = None
-) -> Dict[str, Any]:
+    metadata: dict[str, Any] | None = None,
+    ip_address: str | None = None
+) -> dict[str, Any]:
     """
     Records an administrative action with automatic PII redaction and multi-tenant isolation.
     """
@@ -47,7 +50,7 @@ def get_tenant_audit_logs(
     workspace_id: str,
     limit: int = 50,
     offset: int = 0
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Retrieves audit logs filtered strictly to the caller's workspace.
     """

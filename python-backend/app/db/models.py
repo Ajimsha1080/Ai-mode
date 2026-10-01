@@ -1,10 +1,19 @@
-import os
 import datetime
-from typing import Optional, List, Dict, Any
+import os
+
 from sqlalchemy import (
-    Column, String, Integer, Float, Boolean, DateTime, Text, JSON, ForeignKey, Index, text
+    JSON,
+    Boolean,
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
 )
-from sqlalchemy.orm import relationship, declarative_base
+from sqlalchemy.orm import relationship
+
 from .database import Base
 
 try:
@@ -20,7 +29,7 @@ def get_vector_type(dim: int = 1536):
     return JSON
 
 def utcnow():
-    return datetime.datetime.now(datetime.timezone.utc)
+    return datetime.datetime.now(datetime.UTC)
 
 # ==============================================================================
 # 1. CORE TENANCY & IDENTITY

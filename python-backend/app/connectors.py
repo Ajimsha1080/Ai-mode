@@ -1,18 +1,19 @@
 import time
 import uuid
-from typing import Dict, Any, List, Optional
-from fastapi import APIRouter, HTTPException, Depends, status
-from pydantic import BaseModel, Field
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from typing import Any
 
+from fastapi import APIRouter, Depends
+from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from .auth import require_admin_auth
 from .db.database import get_db_session
-from .db.models import IntegrationModel, ProductModel
-from .auth import verify_service_jwt, require_admin_auth
+from .db.models import IntegrationModel
 
 router = APIRouter(prefix="/api/v1/connectors", tags=["connectors"])
 
-INTEGRATION_DEFINITIONS = [
+INTEGRATION_DEFINITIONS: list[dict[str, Any]] = [
     {
         "id": "shopify",
         "name": "Shopify Storefront & Admin API",
@@ -103,21 +104,21 @@ INTEGRATION_DEFINITIONS = [
 ]
 
 class ConnectPlatformRequest(BaseModel):
-    provider: Optional[str] = None
-    config: Dict[str, Any] = Field(default_factory=dict)
-    credentials: Dict[str, Any] = Field(default_factory=dict)
-    action: Optional[str] = None
+    provider: str | None = None
+    config: dict[str, Any] = Field(default_factory=dict)
+    credentials: dict[str, Any] = Field(default_factory=dict)
+    action: str | None = None
 
 class SyncCatalogRequest(BaseModel):
     full_sync: bool = False
 
 class ReplayEventRequest(BaseModel):
     eventId: str
-    eventType: Optional[str] = None
+    eventType: str | None = None
 
 @router.get("/")
 async def list_connectors(
-    claims: Dict[str, Any] = Depends(require_admin_auth),
+    claims: dict[str, Any] = Depends(require_admin_auth),
     session: AsyncSession = Depends(get_db_session)
 ):
     workspace_id = claims["workspace_id"]
@@ -125,7 +126,7 @@ async def list_connectors(
     res = await session.execute(stmt)
     integrations = {i.provider.lower(): i for i in res.scalars().all()}
 
-    connectors = []
+    connectors: list[dict[str, Any]] = []
     for defn in INTEGRATION_DEFINITIONS:
         cid = defn["id"]
         record = integrations.get(cid)
@@ -172,7 +173,7 @@ async def list_connectors(
 async def connect_platform(
     provider: str,
     req: ConnectPlatformRequest,
-    claims: Dict[str, Any] = Depends(require_admin_auth),
+    claims: dict[str, Any] = Depends(require_admin_auth),
     session: AsyncSession = Depends(get_db_session)
 ):
     workspace_id = claims["workspace_id"]
@@ -216,8 +217,8 @@ async def connect_platform(
 @router.post("/{provider}/sync")
 async def sync_platform(
     provider: str,
-    req: Optional[SyncCatalogRequest] = None,
-    claims: Dict[str, Any] = Depends(require_admin_auth),
+    req: SyncCatalogRequest | None = None,
+    claims: dict[str, Any] = Depends(require_admin_auth),
     session: AsyncSession = Depends(get_db_session)
 ):
     workspace_id = claims["workspace_id"]
@@ -243,7 +244,7 @@ async def sync_platform(
 
 @router.post("/sync-all")
 async def sync_all_platforms(
-    claims: Dict[str, Any] = Depends(require_admin_auth),
+    claims: dict[str, Any] = Depends(require_admin_auth),
     session: AsyncSession = Depends(get_db_session)
 ):
     workspace_id = claims["workspace_id"]
@@ -278,7 +279,7 @@ async def sync_all_platforms(
 @router.post("/{provider}/disconnect")
 async def disconnect_platform(
     provider: str,
-    claims: Dict[str, Any] = Depends(require_admin_auth),
+    claims: dict[str, Any] = Depends(require_admin_auth),
     session: AsyncSession = Depends(get_db_session)
 ):
     workspace_id = claims["workspace_id"]
@@ -300,10 +301,9 @@ async def disconnect_platform(
 @router.get("/{provider}/logs")
 async def get_connector_logs(
     provider: str,
-    claims: Dict[str, Any] = Depends(require_admin_auth),
+    claims: dict[str, Any] = Depends(require_admin_auth),
     session: AsyncSession = Depends(get_db_session)
 ):
-    workspace_id = claims["workspace_id"]
     return {
         "integrationId": provider,
         "syncJobs": [],
@@ -327,7 +327,7 @@ async def get_connector_logs(
 async def replay_connector_log(
     provider: str,
     req: ReplayEventRequest,
-    claims: Dict[str, Any] = Depends(require_admin_auth),
+    claims: dict[str, Any] = Depends(require_admin_auth),
     session: AsyncSession = Depends(get_db_session)
 ):
     return {
@@ -341,12 +341,12 @@ async def replay_connector_log(
 
 
 class CsvCatalogConnector:
-    def __init__(self, workspace_id: str, config: Dict[str, Any]):
+    def __init__(self, workspace_id: str, config: dict[str, Any]):
         self.workspace_id = workspace_id
         self.config = config
-        self._inventory = {}
+        self._inventory: dict[str, int] = {}
 
-    def sync_products(self) -> List[Dict[str, Any]]:
+    def sync_products(self) -> list[dict[str, Any]]:
         import csv
         import io
         csv_content = self.config.get("csv_content", "")
@@ -371,11 +371,11 @@ class CsvCatalogConnector:
 
 
 class ShopifyConnector:
-    def __init__(self, workspace_id: str, config: Dict[str, Any]):
+    def __init__(self, workspace_id: str, config: dict[str, Any]):
         self.workspace_id = workspace_id
         self.config = config
 
-    def sync_products(self) -> List[Dict[str, Any]]:
+    def sync_products(self) -> list[dict[str, Any]]:
         return [
             {
                 "id": f"sp_{self.workspace_id}_01",
@@ -389,11 +389,11 @@ class ShopifyConnector:
 
 
 class WooCommerceConnector:
-    def __init__(self, workspace_id: str, config: Dict[str, Any]):
+    def __init__(self, workspace_id: str, config: dict[str, Any]):
         self.workspace_id = workspace_id
         self.config = config
 
-    def sync_products(self) -> List[Dict[str, Any]]:
+    def sync_products(self) -> list[dict[str, Any]]:
         return [
             {
                 "id": f"wc_{self.workspace_id}_01",
