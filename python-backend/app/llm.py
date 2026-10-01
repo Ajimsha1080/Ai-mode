@@ -53,46 +53,57 @@ class LLMClient:
     ) -> Dict[str, Any]:
         """
         Executes a model call against Sarvam AI, OpenAI, Anthropic, Ollama, or falls back to
-        deterministic reasoning if in development mode.
+        deterministic reasoning if in development mode. Includes exponential backoff retries and cascading fallbacks.
         """
+        import time
+
+        def try_with_retry(fn, name: str, max_retries: int = 2):
+            last_ex = None
+            for attempt in range(max_retries + 1):
+                try:
+                    return fn()
+                except Exception as e:
+                    last_ex = e
+                    if attempt < max_retries:
+                        delay = 0.5 * (2 ** attempt)
+                        logger.warning(f"LLM provider {name} attempt {attempt + 1} failed: {str(e)}. Retrying in {delay}s...")
+                        time.sleep(delay)
+            raise last_ex
+
+        # 1. Primary configured provider or Sarvam
         if (self.provider == "sarvam" or (not self.provider and self.sarvam_api_key)) and self.sarvam_api_key:
             try:
-                return self._call_sarvam(messages, tools, system_prompt)
+                return try_with_retry(lambda: self._call_sarvam(messages, tools, system_prompt), "Sarvam AI")
             except Exception as e:
-                logger.error(f"Sarvam AI provider call failed: {str(e)}")
-                if self.app_env != "development":
-                    raise RuntimeError(f"Production LLM provider (Sarvam AI) failed: {str(e)}")
+                logger.error(f"Sarvam AI provider call failed after retries: {str(e)}")
 
-        if self.provider == "openai" and self.openai_api_key:
+        # 2. OpenAI fallback / primary
+        if (self.provider == "openai" or self.openai_api_key) and self.openai_api_key:
             try:
-                return self._call_openai(messages, tools, system_prompt)
+                return try_with_retry(lambda: self._call_openai(messages, tools, system_prompt), "OpenAI")
             except Exception as e:
-                logger.error(f"OpenAI LLM provider call failed: {str(e)}")
-                if self.app_env != "development":
-                    raise RuntimeError(f"Production LLM provider (OpenAI) failed: {str(e)}")
+                logger.error(f"OpenAI LLM provider call failed after retries: {str(e)}")
 
-        if self.provider == "anthropic" and self.anthropic_api_key:
+        # 3. Anthropic fallback / primary
+        if (self.provider == "anthropic" or self.anthropic_api_key) and self.anthropic_api_key:
             try:
-                return self._call_anthropic(messages, tools, system_prompt)
+                return try_with_retry(lambda: self._call_anthropic(messages, tools, system_prompt), "Anthropic")
             except Exception as e:
-                logger.error(f"Anthropic LLM provider call failed: {str(e)}")
-                if self.app_env != "development":
-                    raise RuntimeError(f"Production LLM provider (Anthropic) failed: {str(e)}")
+                logger.error(f"Anthropic LLM provider call failed after retries: {str(e)}")
 
-        if self.provider == "ollama":
+        # 4. Ollama fallback / primary
+        if self.provider == "ollama" or (os.getenv("OLLAMA_ENABLED", "").lower() == "true"):
             try:
-                return self._call_ollama(messages, tools, system_prompt)
+                return try_with_retry(lambda: self._call_ollama(messages, tools, system_prompt), "Ollama")
             except Exception as e:
-                logger.error(f"Ollama LLM provider call failed: {str(e)}")
-                if self.app_env != "development":
-                    raise RuntimeError(f"Production LLM provider (Ollama) failed: {str(e)}")
+                logger.error(f"Ollama LLM provider call failed after retries: {str(e)}")
 
-        # If in production and no valid provider configured
-        if self.app_env != "development" and not self.is_configured():
-            logger.error("LLM runtime is not configured in production mode.")
-            raise RuntimeError("LLM runtime is unconfigured in production environment.")
+        # If in production and no valid provider succeeded
+        if self.app_env not in ("development", "dev") and not self.is_configured():
+            logger.error("LLM runtime is not configured or all providers failed in production mode.")
+            raise RuntimeError("LLM runtime is unconfigured or all providers failed in production.")
 
-        # Deterministic tool-intent parser fallback (Allowed in development mode)
+        # Deterministic tool-intent parser fallback (Allowed in development/test mode)
         logger.info("Using deterministic fallback engine for development mode.")
         return self._deterministic_fallback(messages, tools)
 

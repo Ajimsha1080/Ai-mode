@@ -41,6 +41,8 @@ function resolveProductCards(responseText: string, userMessage: string, workspac
   return currentPayload || null;
 }
 
+const PYTHON_BACKEND_URL = process.env.PYTHON_BACKEND_URL || 'http://127.0.0.1:8000';
+
 export async function POST(req: Request, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
   const authHeader = req.headers.get('Authorization') || req.headers.get('authorization') || '';
@@ -54,10 +56,8 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
     const token = authHeader.substring(7).trim();
 
     if (token.startsWith('pk_live_') || token.startsWith('dep_')) {
-      // Public Deployment Key
       const dep = db.deployments.find(d => (d.public_key === token || d.id === token) && d.status === 'ACTIVE');
       if (dep) {
-        // Enforce allowed domains server-side
         if (dep.allowed_domains && !dep.allowed_domains.includes('*')) {
           const originHost = origin.replace(/^https?:\/\//, '').split('/')[0];
           const matched = dep.allowed_domains.some(domain => {
@@ -77,7 +77,6 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
         isPublicDeployment = true;
       }
     } else {
-      // Secret API Key
       const authResult = await verifyApiKey(token);
       if (authResult) {
         workspaceId = authResult.workspaceId;
@@ -92,11 +91,70 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
   }
 
   try {
-    const { message, conversation_id, customer_identifier } = await req.json();
+    const body = await req.json();
+    const { message, conversation_id, customer_identifier, stream } = body;
     if (!message) {
       return NextResponse.json({ error: { code: 'INVALID_REQUEST', message: 'Field "message" is required.' } }, { status: 400 });
     }
 
+    // 1. Forward request to Python FastAPI single backend of record
+    try {
+      const pyUrl = stream
+        ? `${PYTHON_BACKEND_URL}/api/v1/agents/${id}/chat/stream`
+        : `${PYTHON_BACKEND_URL}/api/v1/agents/${id}/chat`;
+
+      const pyRes = await fetch(pyUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': authHeader,
+          'Origin': origin
+        },
+        body: JSON.stringify({
+          message,
+          conversation_id,
+          workspace_id: workspaceId
+        }),
+        signal: AbortSignal.timeout(10000)
+      });
+
+      if (pyRes.ok) {
+        if (stream && pyRes.body) {
+          return new Response(pyRes.body, {
+            headers: {
+              'Content-Type': 'text/event-stream',
+              'Cache-Control': 'no-cache',
+              'Connection': 'keep-alive'
+            }
+          });
+        }
+
+        const pyData = await pyRes.json();
+        const finalPayload = resolveProductCards(pyData.response || '', message, workspaceId, pyData.interactive_payload);
+        const pagination = finalPayload?.pagination || pyData.interactive_payload?.pagination || pyData.metadata?.pagination;
+
+        return NextResponse.json({
+          conversation_id: pyData.conversation_id || conversation_id,
+          message_id: pyData.message_id || 'msg_py_' + Math.random().toString(36).substring(2, 9),
+          response: pyData.response,
+          interactive_payload: finalPayload,
+          metadata: {
+            products: finalPayload?.type === 'PRODUCTS' ? finalPayload.data : undefined,
+            order: finalPayload?.type === 'ORDER_TRACKING' ? finalPayload.data : undefined,
+            pagination: pagination || undefined,
+          },
+          trace: {
+            latency_ms: pyData.trace?.duration_ms || pyData.trace?.latency_ms || 100,
+            tokens_used: pyData.trace?.tokens_used || {},
+            tools_called: (pyData.trace?.tool_executions || []).map((t: any) => t.tool_name)
+          }
+        });
+      }
+    } catch (pyErr) {
+      // Fall through to embedded runtime if FastAPI process is restarting in dev
+    }
+
+    // 2. Embedded Runtime Execution Fallback
     const result = await runAgentCycle({
       agent_id: id,
       workspace_id: workspaceId,

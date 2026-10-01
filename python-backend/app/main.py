@@ -90,22 +90,37 @@ async def get_db_status(
         "persistence": "Enterprise Relational & Vector Storage Active"
     }
 
+from .rate_limiter import rate_limiter
+from .auth import verify_service_jwt, require_admin_auth, resolve_agent_chat_auth
+
+
 @app.post("/api/v1/agents/{agent_id}/chat", response_model=ChatResponse)
 async def chat_agent(
     agent_id: str,
     req: ChatRequest,
-    claims: Dict[str, Any] = Depends(verify_service_jwt)
+    claims: Dict[str, Any] = Depends(resolve_agent_chat_auth)
 ):
     """
     Executes a full multi-step agent reasoning cycle with 12-stage RAG and tools.
-    Workspace ID is strictly derived from the verified service JWT.
+    Workspace ID is strictly derived from verified auth (Service JWT or Public Deployment Key).
+    CPU-heavy work is offloaded to a worker thread outside the async event loop.
     """
     token_workspace_id = claims["workspace_id"]
-    if req.workspace_id and req.workspace_id != token_workspace_id and claims.get("role") != "SUPER_ADMIN":
+    if req.workspace_id and req.workspace_id != token_workspace_id and claims.get("role") != "SUPERADMIN":
         raise HTTPException(status_code=403, detail="Forbidden: Cross-tenant workspace mismatch")
 
+    # Rate limit check per tenant
+    allowed, remaining, retry_after = rate_limiter.check_rate_limit(token_workspace_id)
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded for workspace. Please retry in {retry_after} seconds."
+        )
+
     try:
-        result = run_agent_cycle(
+        # Offload CPU work (embedding generation, ranking, tool execution) to thread pool
+        result = await asyncio.to_thread(
+            run_agent_cycle,
             agent_id=agent_id,
             message=req.message,
             conversation_id=req.conversation_id,
@@ -115,18 +130,29 @@ async def chat_agent(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.post("/api/v1/agents/{agent_id}/chat/stream")
 async def chat_agent_stream(
     agent_id: str,
     req: ChatRequest,
-    claims: Dict[str, Any] = Depends(verify_service_jwt)
+    claims: Dict[str, Any] = Depends(resolve_agent_chat_auth)
 ):
     token_workspace_id = claims["workspace_id"]
-    if req.workspace_id and req.workspace_id != token_workspace_id and claims.get("role") != "SUPER_ADMIN":
+    if req.workspace_id and req.workspace_id != token_workspace_id and claims.get("role") != "SUPERADMIN":
         raise HTTPException(status_code=403, detail="Forbidden: Cross-tenant workspace mismatch")
 
+    # Rate limit check per tenant
+    allowed, remaining, retry_after = rate_limiter.check_rate_limit(token_workspace_id)
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded for workspace. Please retry in {retry_after} seconds."
+        )
+
     async def event_generator():
-        result = run_agent_cycle(
+        # Offload CPU work to thread pool
+        result = await asyncio.to_thread(
+            run_agent_cycle,
             agent_id=agent_id,
             message=req.message,
             conversation_id=req.conversation_id,
@@ -134,18 +160,18 @@ async def chat_agent_stream(
         )
 
         yield f"event: stage\ndata: {json.dumps({'stage': 'INTENT_UNDERSTANDING', 'intent': result.get('intent')})}\n\n"
-        await asyncio.sleep(0.02)
+        await asyncio.sleep(0.01)
 
         if result.get("trace", {}).get("retrieved_citations"):
             yield f"event: stage\ndata: {json.dumps({'stage': 'RAG_RETRIEVAL', 'citations': len(result['trace']['retrieved_citations'])})}\n\n"
-            await asyncio.sleep(0.02)
+            await asyncio.sleep(0.01)
 
         full_text = result.get("response", "")
         words = full_text.split(" ")
         for i, word in enumerate(words):
             chunk = word + (" " if i < len(words) - 1 else "")
             yield f"event: token\ndata: {json.dumps({'token': chunk})}\n\n"
-            await asyncio.sleep(0.015)
+            await asyncio.sleep(0.01)
 
         yield f"event: done\ndata: {json.dumps(result)}\n\n"
 
