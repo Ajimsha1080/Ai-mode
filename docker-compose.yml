@@ -65,9 +65,12 @@ services:
       - POSTGRES_USER=${POSTGRES_USER:-postgres}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - SERVICE_JWT_PUBLIC_KEY=${SERVICE_JWT_PUBLIC_KEY}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - SARVAM_API_KEY=${SARVAM_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - LLM_PROVIDER=${LLM_PROVIDER:-sarvam}
+      - LLM_MODEL=${LLM_MODEL:-sarvam-105b-conversations}
     depends_on:
       postgres:
         condition: service_healthy
@@ -100,15 +103,9 @@ services:
       - NODE_ENV=production
       - APP_ENV=${APP_ENV:-production}
       - PORT=3000
-      - DATABASE_URL=${DATABASE_URL}
-      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
       - PYTHON_BACKEND_URL=http://python-backend:8000
       - SESSION_JWT_SECRET=${SESSION_JWT_SECRET}
       - SERVICE_JWT_PRIVATE_KEY=${SERVICE_JWT_PRIVATE_KEY}
-      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
-      - SARVAM_API_KEY=${SARVAM_API_KEY:-}
-      - LLM_PROVIDER=${LLM_PROVIDER:-sarvam}
-      - LLM_MODEL=${LLM_MODEL:-sarvam-105b-conversations}
       - AUTH_COOKIE_NAME=aaas_session_token
     depends_on:
       python-backend:

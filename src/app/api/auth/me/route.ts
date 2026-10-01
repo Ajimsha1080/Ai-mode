@@ -1,37 +1,52 @@
 import { NextResponse } from 'next/server';
-import { getAuthSession } from '@/lib/auth';
-import { db } from '@/lib/db';
-import { seedDatabaseIfEmpty } from '@/lib/db/seed';
+import { getAuthSession, AUTH_COOKIE_NAME } from '@/lib/auth';
+
+const PYTHON_BACKEND_URL = process.env.PYTHON_BACKEND_URL || 'http://127.0.0.1:8000';
 
 export async function GET(req: Request) {
-  if (db.users.length === 0 || db.commerce_products.length === 0) {
-    await seedDatabaseIfEmpty();
-  }
-  const session = await getAuthSession(req);
-  if (!session) {
+  try {
+    const session = await getAuthSession(req);
+    if (!session) {
+      return NextResponse.json({ authenticated: false, user: null });
+    }
+
+    const authHeader = req.headers.get('authorization') || '';
+    const cookieHeader = req.headers.get('cookie') || '';
+
+    const pyRes = await fetch(`${PYTHON_BACKEND_URL}/api/v1/auth/me`, {
+      headers: {
+        'Authorization': authHeader.startsWith('Bearer ') ? authHeader : `Bearer ${session.token || ''}`,
+        'Cookie': cookieHeader
+      },
+      signal: AbortSignal.timeout(5000)
+    });
+
+    if (pyRes.ok) {
+      const data = await pyRes.json();
+      return NextResponse.json({
+        authenticated: true,
+        user: data.user || session.user,
+        workspace_id: data.workspace_id || session.workspaceId,
+        role: session.role
+      });
+    }
+
+    return NextResponse.json({
+      authenticated: true,
+      user: session.user,
+      workspace: { id: session.workspaceId, name: 'Store Workspace' },
+      role: session.role
+    });
+  } catch {
+    const session = await getAuthSession(req);
+    if (session) {
+      return NextResponse.json({
+        authenticated: true,
+        user: session.user,
+        workspace: { id: session.workspaceId, name: 'Store Workspace' },
+        role: session.role
+      });
+    }
     return NextResponse.json({ authenticated: false, user: null });
   }
-
-  const workspace = db.workspaces.find(w => w.id === session.workspaceId);
-  const allWorkspaces = db.workspace_members
-    .filter(m => m.user_id === session.user.id)
-    .map(m => {
-      const ws = db.workspaces.find(w => w.id === m.workspace_id);
-      return ws ? { ...ws, role: m.role } : null;
-    })
-    .filter(Boolean);
-
-  return NextResponse.json({
-    authenticated: true,
-    user: {
-      id: session.user.id,
-      email: session.user.email,
-      name: session.user.name,
-      avatar_url: session.user.avatar_url,
-      is_super_admin: session.user.is_super_admin
-    },
-    workspace,
-    role: session.role,
-    workspaces: allWorkspaces.length > 0 ? allWorkspaces : [workspace]
-  });
 }

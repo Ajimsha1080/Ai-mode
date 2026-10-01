@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server';
-import { getAuthSession, requireRole } from '@/lib/auth';
-import { db } from '@/lib/db';
-import { generateId } from '@/lib/utils';
+import { getAuthSession, createServiceJwt, requireRole } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
+
+const PYTHON_BACKEND_URL = process.env.PYTHON_BACKEND_URL || 'http://127.0.0.1:8000';
 
 export async function POST(
   req: Request,
@@ -17,49 +17,20 @@ export async function POST(
     return NextResponse.json({ error: { message: 'Forbidden: Insufficient permissions. Requires EDITOR, ADMIN, or OWNER role.' } }, { status: 403 });
   }
 
-  const existingIdx = db.workspace_integrations.findIndex(
-    (wi: any) => wi.workspace_id === session.workspaceId && wi.integration_id === integrationId
-  );
+  try {
+    const serviceToken = await createServiceJwt(session.workspaceId, session.user.id, session.role);
+    const pyRes = await fetch(`${PYTHON_BACKEND_URL}/api/v1/connectors/${integrationId}/disconnect`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${serviceToken}`,
+        'X-Tenant-ID': session.workspaceId
+      },
+      signal: AbortSignal.timeout(10000)
+    });
 
-  if (existingIdx >= 0) {
-    // Revoke locally and reset to NOT_CONNECTED
-    db.workspace_integrations[existingIdx] = {
-      ...db.workspace_integrations[existingIdx],
-      status: 'NOT_CONNECTED',
-      credentials_ciphertext: undefined,
-      masked_credentials: {},
-      config: {},
-      connected_at: undefined,
-      connected_by_user_id: undefined,
-      connected_by_email: undefined,
-      last_sync_status: undefined,
-      last_error: undefined,
-      updated_at: new Date().toISOString()
-    };
+    const data = await pyRes.json();
+    return NextResponse.json(data, { status: pyRes.status });
+  } catch (err: any) {
+    return NextResponse.json({ error: { message: `Failed to disconnect connector: ${err.message}` } }, { status: 500 });
   }
-
-  // Add audit trail log
-  db.audit_logs.push({
-    id: generateId('aud'),
-    workspace_id: session.workspaceId,
-    actor_user_id: session.user.id,
-    actor_email: session.user.email,
-    action: 'INTEGRATION_DISCONNECTED',
-    resource_type: 'Integration',
-    resource_id: integrationId,
-    metadata: {
-      integrationId,
-      disconnectedAt: new Date().toISOString()
-    },
-    ip_address: '127.0.0.1',
-    created_at: new Date().toISOString()
-  });
-
-  db.saveImmediate();
-
-  return NextResponse.json({
-    success: true,
-    status: 'NOT_CONNECTED',
-    message: `Successfully disconnected and revoked credentials for ${integrationId}.`
-  });
 }

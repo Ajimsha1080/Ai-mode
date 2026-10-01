@@ -18,6 +18,8 @@ from .auth import verify_service_jwt, require_admin_auth
 from .llm import LLMClient
 from .observability import ObservabilityMiddleware
 from .audit import record_audit_log, get_tenant_audit_logs
+from .auth_routes import router as auth_router
+from .connectors import router as connectors_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -33,6 +35,8 @@ app = FastAPI(
 )
 
 app.add_middleware(ObservabilityMiddleware)
+app.include_router(auth_router)
+app.include_router(connectors_router)
 
 # Restrict CORS to explicit allowed origins list (Never wildcard with credentials)
 raw_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000,http://frontend:3000")

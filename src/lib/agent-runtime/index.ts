@@ -125,8 +125,12 @@ export async function runAgentCycle(params: AgentRunParams): Promise<AgentRunRes
         trace: data.trace
       };
     }
-  } catch {}
+  } catch (err: any) {
+    if (process.env.NODE_ENV === 'production' && process.env.APP_ENV === 'production') {
+      throw new Error(`FastAPI backend unreachable: ${err?.message || 'Connection refused'}`);
+    }
+  }
 
-  // 2. Direct In-Process Python Runtime Fallback
+  // 2. Direct In-Process Python Runtime Fallback (For local test runner only)
   return runAgentCyclePythonProcess(params);
 }

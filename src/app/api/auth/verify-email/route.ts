@@ -1,76 +1,36 @@
 import { NextResponse } from 'next/server';
-import { db } from '@/lib/db';
+
+const PYTHON_BACKEND_URL = process.env.PYTHON_BACKEND_URL || 'http://127.0.0.1:8000';
 
 export async function GET(req: Request) {
   try {
     const url = new URL(req.url);
     const token = url.searchParams.get('token');
-
-    if (!token) {
-      return NextResponse.json({ error: { message: 'Verification token is required' } }, { status: 400 });
-    }
-
-    const user = db.users.find(u => u.verification_token === token);
-    if (!user) {
-      return NextResponse.json({ error: { message: 'Invalid or expired verification token' } }, { status: 400 });
-    }
-
-    if (user.verification_token_expires_at) {
-      const expires = new Date(user.verification_token_expires_at).getTime();
-      if (Date.now() > expires) {
-        return NextResponse.json({ error: { message: 'Verification token has expired. Please request a new one.' } }, { status: 400 });
-      }
-    }
-
-    user.email_verified = true;
-    user.verification_token = undefined;
-    user.verification_token_expires_at = undefined;
-    user.updated_at = new Date().toISOString();
-
-    db.saveImmediate();
-
-    return NextResponse.json({
-      success: true,
-      message: 'Email successfully verified. You can now log in.'
+    const pyRes = await fetch(`${PYTHON_BACKEND_URL}/api/v1/auth/verify-email?token=${encodeURIComponent(token || '')}`, {
+      method: 'GET',
+      signal: AbortSignal.timeout(10000)
     });
+
+    const data = await pyRes.json();
+    return NextResponse.json(data, { status: pyRes.status });
   } catch (err: any) {
-    return NextResponse.json({ error: { message: 'Failed to verify email' } }, { status: 500 });
+    return NextResponse.json({ error: { message: 'Authentication service error' } }, { status: 500 });
   }
 }
 
 export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => ({}));
-    const { token } = body;
-
-    if (!token) {
-      return NextResponse.json({ error: { message: 'Verification token is required' } }, { status: 400 });
-    }
-
-    const user = db.users.find(u => u.verification_token === token);
-    if (!user) {
-      return NextResponse.json({ error: { message: 'Invalid or expired verification token' } }, { status: 400 });
-    }
-
-    if (user.verification_token_expires_at) {
-      const expires = new Date(user.verification_token_expires_at).getTime();
-      if (Date.now() > expires) {
-        return NextResponse.json({ error: { message: 'Verification token has expired. Please request a new one.' } }, { status: 400 });
-      }
-    }
-
-    user.email_verified = true;
-    user.verification_token = undefined;
-    user.verification_token_expires_at = undefined;
-    user.updated_at = new Date().toISOString();
-
-    db.saveImmediate();
-
-    return NextResponse.json({
-      success: true,
-      message: 'Email successfully verified. You can now log in.'
+    const pyRes = await fetch(`${PYTHON_BACKEND_URL}/api/v1/auth/verify-email`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10000)
     });
+
+    const data = await pyRes.json();
+    return NextResponse.json(data, { status: pyRes.status });
   } catch (err: any) {
-    return NextResponse.json({ error: { message: 'Failed to verify email' } }, { status: 500 });
+    return NextResponse.json({ error: { message: 'Authentication service error' } }, { status: 500 });
   }
 }

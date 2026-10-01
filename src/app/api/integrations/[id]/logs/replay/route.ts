@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server';
-import { getAuthSession, requireRole } from '@/lib/auth';
-import { db } from '@/lib/db';
-import { generateId } from '@/lib/utils';
+import { getAuthSession, createServiceJwt, requireRole } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
+
+const PYTHON_BACKEND_URL = process.env.PYTHON_BACKEND_URL || 'http://127.0.0.1:8000';
 
 export async function POST(
   req: Request,
@@ -24,39 +24,22 @@ export async function POST(
     body = {};
   }
 
-  const { eventId, eventType } = body;
+  try {
+    const serviceToken = await createServiceJwt(session.workspaceId, session.user.id, session.role);
+    const pyRes = await fetch(`${PYTHON_BACKEND_URL}/api/v1/connectors/${integrationId}/logs/replay`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${serviceToken}`,
+        'X-Tenant-ID': session.workspaceId
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10000)
+    });
 
-  if (!eventId) {
-    return NextResponse.json({ error: { message: 'Event ID is required for replay.' } }, { status: 400 });
+    const data = await pyRes.json();
+    return NextResponse.json(data, { status: pyRes.status });
+  } catch (err: any) {
+    return NextResponse.json({ error: { message: 'Failed to replay event' } }, { status: 500 });
   }
-
-  // Record audit log for replayed event
-  db.audit_logs.push({
-    id: generateId('aud'),
-    workspace_id: session.workspaceId,
-    actor_user_id: session.user.id,
-    actor_email: session.user.email,
-    action: 'WEBHOOK_EVENT_REPLAY',
-    resource_type: 'Integration',
-    resource_id: integrationId,
-    metadata: {
-      integrationId,
-      replayedEventId: eventId,
-      eventType: eventType || 'generic.event',
-      replayedAt: new Date().toISOString()
-    },
-    ip_address: '127.0.0.1',
-    created_at: new Date().toISOString()
-  });
-
-  db.saveImmediate();
-
-  return NextResponse.json({
-    success: true,
-    replayedEventId: eventId,
-    responseCode: 200,
-    status: 'DELIVERED',
-    latencyMs: Math.floor(Math.random() * 40) + 35,
-    message: `Event '${eventId}' successfully replayed with HTTP 200 OK.`
-  });
 }
