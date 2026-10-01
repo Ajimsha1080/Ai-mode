@@ -16,6 +16,8 @@ from .db.database import init_db, get_db_session
 from .db.repository import DatabaseRepository
 from .auth import verify_service_jwt, require_admin_auth
 from .llm import LLMClient
+from .observability import ObservabilityMiddleware
+from .audit import record_audit_log, get_tenant_audit_logs
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -30,6 +32,8 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+app.add_middleware(ObservabilityMiddleware)
+
 # Restrict CORS to explicit allowed origins list (Never wildcard with credentials)
 raw_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000,http://frontend:3000")
 allowed_origins = [o.strip() for o in raw_origins.split(",") if o.strip() and o.strip() != "*"]
@@ -43,6 +47,7 @@ app.add_middleware(
 )
 
 @app.get("/health")
+@app.get("/healthz")
 def health_check():
     return {
         "status": "HEALTHY",
@@ -51,6 +56,7 @@ def health_check():
     }
 
 @app.get("/ready")
+@app.get("/readyz")
 async def readiness_check(session: AsyncSession = Depends(get_db_session)):
     try:
         from sqlalchemy import text
@@ -89,6 +95,34 @@ async def get_db_status(
         "tenant_knowledge_chunks": len(chunks),
         "persistence": "Enterprise Relational & Vector Storage Active"
     }
+
+@app.get("/api/v1/audit/logs")
+async def get_audit_logs(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    admin_claims: Dict[str, Any] = Depends(require_admin_auth)
+):
+    """Retrieve audit logs for admin actions scoped strictly to the authenticated workspace."""
+    workspace_id = admin_claims["workspace_id"]
+    return get_tenant_audit_logs(workspace_id, limit=limit, offset=offset)
+
+@app.post("/api/v1/audit/logs")
+async def create_audit_log_entry(
+    payload: Dict[str, Any],
+    admin_claims: Dict[str, Any] = Depends(require_admin_auth)
+):
+    """Record an administrative audit log entry with PII redaction."""
+    workspace_id = admin_claims["workspace_id"]
+    actor_id = admin_claims.get("sub", "admin_user")
+    entry = record_audit_log(
+        workspace_id=workspace_id,
+        actor_id=actor_id,
+        action=payload.get("action", "ADMIN_ACTION"),
+        resource_type=payload.get("resource_type", "SYSTEM"),
+        resource_id=payload.get("resource_id", "res_default"),
+        metadata=payload.get("metadata", {})
+    )
+    return entry
 
 from .rate_limiter import rate_limiter
 from .auth import verify_service_jwt, require_admin_auth, resolve_agent_chat_auth

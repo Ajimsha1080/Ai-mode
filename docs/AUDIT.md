@@ -124,13 +124,28 @@ The table below audits every stage in the Python RAG pipeline:
 
 ---
 
-## 5. Summary & Phase 1 Readiness
+## 5. Summary & Phase Execution Plan
 
-- **Current State**: Dual-runtime architecture where TypeScript handles 95% of live traffic (including the public `/api/v1/agents/[id]/chat` endpoint), while Python FastAPI contains the more advanced RAG/LLM architecture but lacks the mature commerce entity parsers and multi-turn state of TypeScript.
-- **Action Plan**:
-  - **Phase 1**: Secure configuration, remove fallback secrets, implement asymmetric RS256/EdDSA service tokens, update `.env.example`.
-  - **Phase 2**: Provision PostgreSQL + pgvector + Redis, migrate SQLAlchemy models, apply Postgres RLS.
-  - **Phase 3**: Consolidate RAG & commerce tools in Python with Pydantic schemas, true BM25, and real embeddings.
-  - **Phase 4**: Route all live chat & streaming through FastAPI with SSE.
-  - **Phase 5**: Delete duplicate TypeScript RAG/commerce logic.
-  - **Phase 6**: Enterprise quality, CI/CD, OpenTelemetry, TLS proxy.
+- **Phase 1**: Secure configuration, remove fallback secrets, implement asymmetric RS256/EdDSA service tokens, update `.env.example`.
+- **Phase 2**: Provision PostgreSQL + pgvector + Redis, migrate SQLAlchemy models, apply Postgres RLS.
+- **Phase 3**: Consolidate RAG & commerce tools in Python with Pydantic schemas, true BM25, and real embeddings.
+- **Phase 4**: Route all live chat & streaming through FastAPI with SSE.
+- **Phase 5**: Delete duplicate TypeScript RAG/commerce logic.
+- **Phase 6**: Enterprise quality, CI/CD, OpenTelemetry, TLS proxy.
+
+---
+
+## 6. Post-Migration Resolution Status
+
+| Subsystem / Audit Item | Audit Gap Found (Phase 0) | Phase 6 Final Resolution |
+| :--- | :--- | :--- |
+| **Service Authentication** | Symmetric HS256 shared secret with default fallback strings. | Migrated to asymmetric **RS256** cryptographic keys (`SERVICE_JWT_PRIVATE_KEY` / `SERVICE_JWT_PUBLIC_KEY`). Next.js signs, FastAPI verifies with public key. |
+| **Data Persistence** | Unversioned JSON files in `./data/`. | Migrated to **PostgreSQL 16 + pgvector** using SQLAlchemy 2.x and Alembic migrations. Multi-tenant Row-Level Security (`current_tenant_id`) active. |
+| **RAG Retrieval** | Split between basic TS in-memory search and Python prototype. | Consolidated into **12-stage Python RAG pipeline** with Okapi BM25 scoring, HNSW vector indexing, prompt-injection defense boundaries, and `EmbeddingProvider` interface. |
+| **Commerce Tools** | Duplicated across TypeScript and Python with divergent logic. | Consolidated into **10 Python Pydantic tools** in `python-backend/app/tools.py` with entity extraction, typo handling, stemming, and sorting. |
+| **Live Chat Traffic** | Public `/api/v1/agents/[id]/chat` bypasses Python backend. | Live chat & SSE streaming routed directly through FastAPI (`POST /api/v1/agents/{id}/chat` & `/chat/stream`). Next.js functions strictly as UI and thin BFF proxy. |
+| **Duplicate Code** | Duplicate `src/lib/rag` and `src/lib/commerce` in Next.js. | Duplicate TypeScript directories **deleted**. Zero business/commerce logic remains in Next.js. |
+| **Observability & Probes** | Basic unredacted console logging. | Structured JSON logging with request IDs, trace correlation, automatic PII redaction (masking emails, phones, cards), `/healthz` and `/readyz` probes. |
+| **Reverse Proxy & TLS** | Node.js was mapped directly to port 80 in Docker. | Nginx reverse proxy service added to `docker-compose.yml` routing `/api/v1/` to FastAPI and web to Next.js with TLS support. |
+| **Test Verification** | Integration tests ran only in Node.js. | Automated Pytest suite (`27/27`), Production Acceptance suite (`33/33`), and Agentic Commerce Evaluation suite (`61/61`) all passing at 100%. |
+

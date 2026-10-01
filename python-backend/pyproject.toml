@@ -1,0 +1,63 @@
+[project]
+name = "shopmate-ai-engine"
+version = "2.0.0"
+description = "ShopMate AaaS Enterprise Python AI Backend Engine"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
+    "pydantic>=2.8.0",
+    "sqlalchemy>=2.0.30",
+    "asyncpg>=0.29.0",
+    "aiosqlite>=0.20.0",
+    "pgvector>=0.3.0",
+    "alembic>=1.13.0",
+    "redis>=5.0.0",
+    "pyjwt[crypto]>=2.9.0",
+    "cryptography>=43.0.0",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "httpx>=0.27.0",
+    "ruff>=0.6.0",
+    "mypy>=1.11.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "C",   # complexity
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501", # line length handled by black/ruff format
+    "B008", # do not perform function calls in argument defaults (FastAPI Depends)
+    "C901", # complexity
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["python-backend"]
+asyncio_mode = "strict"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::UserWarning",
+]
