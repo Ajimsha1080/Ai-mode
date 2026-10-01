@@ -122,9 +122,10 @@ async def _fetch_products_db(workspace_id: str) -> List[Dict[str, Any]]:
                 "title": p.title,
                 "category": p.category,
                 "price": float(p.price),
-                "stock": int(p.stock),
+                "stock": int(getattr(p, "total_inventory", 0)),
+                "total_inventory": int(getattr(p, "total_inventory", 0)),
                 "description": p.description or "",
-                "in_stock": int(p.stock) > 0
+                "in_stock": getattr(p, "in_stock", True) and int(getattr(p, "total_inventory", 0)) > 0
             }
             for p in prods
         ]

@@ -1,5 +1,40 @@
 services:
-  # 1. Python FastAPI AI Engine Backend
+  # 1. PostgreSQL 16 with pgvector extension
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: shopmate-postgres
+    restart: always
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-aaas_enterprise}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-aaas_enterprise}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  # 2. Redis 7 Distributed Cache, Sessions & Rate Limiter
+  redis:
+    image: redis:7-alpine
+    container_name: shopmate-redis
+    restart: always
+    command: redis-server --save 60 1 --loglevel warning
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - redis_data:/data
+
+  # 3. Python FastAPI AI Engine & Backend of Record
   python-backend:
     build:
       context: ./python-backend
@@ -14,14 +49,24 @@ services:
     environment:
       - PORT=8000
       - APP_ENV=${APP_ENV:-production}
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
+      - POSTGRES_DB=${POSTGRES_DB:-aaas_enterprise}
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - SERVICE_JWT_PUBLIC_KEY=${SERVICE_JWT_PUBLIC_KEY}
       - SARVAM_API_KEY=${SARVAM_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     volumes:
       - ./python-backend/data:/app/data
 
-  # 2. Next.js Frontend & Storefront
+  # 4. Next.js Frontend Storefront & BFF Proxy
   frontend:
     build:
       context: .
@@ -38,6 +83,8 @@ services:
       - NODE_ENV=production
       - APP_ENV=${APP_ENV:-production}
       - PORT=3000
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
       - PYTHON_BACKEND_URL=http://python-backend:8000
       - SESSION_JWT_SECRET=${SESSION_JWT_SECRET}
       - SERVICE_JWT_PRIVATE_KEY=${SERVICE_JWT_PRIVATE_KEY}
@@ -47,6 +94,13 @@ services:
       - LLM_MODEL=${LLM_MODEL:-sarvam-105b-conversations}
       - AUTH_COOKIE_NAME=aaas_session_token
     depends_on:
-      - python-backend
+      python-backend:
+        condition: service_started
+      redis:
+        condition: service_healthy
     volumes:
       - ./data:/app/data
+
+volumes:
+  postgres_data:
+  redis_data:

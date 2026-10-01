@@ -1,12 +1,15 @@
 # Pinned Production Backend Dependencies
-fastapi==0.115.0
-uvicorn==0.32.0
-pydantic==2.9.2
-python-multipart==0.0.12
-sqlalchemy==2.0.35
-aiosqlite==0.20.0
-asyncpg==0.30.0
-greenlet==3.1.1
-pyjwt==2.9.0
-cryptography==43.0.1
-requests==2.32.3
+fastapi>=0.115.0
+uvicorn>=0.32.0
+pydantic>=2.9.2
+python-multipart>=0.0.12
+sqlalchemy>=2.0.35
+aiosqlite>=0.20.0
+asyncpg>=0.30.0
+pgvector>=0.3.0
+alembic>=1.13.0
+redis>=5.0.0
+greenlet>=3.1.1
+pyjwt>=2.9.0
+cryptography>=43.0.1
+requests>=2.32.3

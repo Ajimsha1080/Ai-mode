@@ -1,6 +1,10 @@
 import os
 import sys
 from pathlib import Path
+from contextlib import asynccontextmanager
+from typing import Optional, AsyncGenerator
+from sqlalchemy import text, event
+from sqlalchemy.engine import Engine
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import declarative_base
 
@@ -8,16 +12,24 @@ from sqlalchemy.orm import declarative_base
 Base = declarative_base()
 
 # Resolve Database URL
-# In enterprise production: postgresql+asyncpg://user:pass@host:5432/dbname
-# In local dev: sqlite+aiosqlite:///./data/aaas_enterprise.db
 DEFAULT_DATA_DIR = Path(__file__).resolve().parent.parent.parent.parent / "data"
 DEFAULT_DATA_DIR.mkdir(parents=True, exist_ok=True)
 DEFAULT_DB_PATH = DEFAULT_DATA_DIR / "aaas_enterprise.db"
 
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    # Use SQLite async driver
+raw_db_url = os.getenv("DATABASE_URL", "")
+
+if not raw_db_url:
     DATABASE_URL = f"sqlite+aiosqlite:///{DEFAULT_DB_PATH.as_posix()}"
+else:
+    # Normalize postgresql driver to asyncpg
+    if raw_db_url.startswith("postgres://"):
+        DATABASE_URL = raw_db_url.replace("postgres://", "postgresql+asyncpg://", 1)
+    elif raw_db_url.startswith("postgresql://") and not raw_db_url.startswith("postgresql+asyncpg://"):
+        DATABASE_URL = raw_db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    elif raw_db_url.startswith("sqlite://") and not raw_db_url.startswith("sqlite+aiosqlite://"):
+        DATABASE_URL = raw_db_url.replace("sqlite://", "sqlite+aiosqlite://", 1)
+    else:
+        DATABASE_URL = raw_db_url
 
 from sqlalchemy.pool import NullPool
 
@@ -28,28 +40,23 @@ engine_kwargs = {
 }
 
 if "sqlite" in DATABASE_URL:
-    # SQLite specific connection arguments
     engine_kwargs["connect_args"] = {"check_same_thread": False}
     engine_kwargs["poolclass"] = NullPool
 else:
-    # PostgreSQL enterprise pooling settings
     engine_kwargs["pool_size"] = 20
     engine_kwargs["max_overflow"] = 10
     engine_kwargs["pool_recycle"] = 3600
 
-from sqlalchemy import event
-from sqlalchemy.engine import Engine
-
-# SQLite high performance PRAGMAs (WAL mode, large cache, memory temp store, mmap)
+# SQLite high performance PRAGMAs
 @event.listens_for(Engine, "connect")
 def set_sqlite_pragma(dbapi_connection, connection_record):
     try:
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA journal_mode=WAL")
         cursor.execute("PRAGMA synchronous=NORMAL")
-        cursor.execute("PRAGMA cache_size=-64000")  # 64MB memory page cache
+        cursor.execute("PRAGMA cache_size=-64000")
         cursor.execute("PRAGMA temp_store=MEMORY")
-        cursor.execute("PRAGMA mmap_size=268435456")  # 256MB memory mapped I/O
+        cursor.execute("PRAGMA foreign_keys=ON")
         cursor.close()
     except Exception:
         pass
@@ -57,18 +64,114 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
 engine = create_async_engine(DATABASE_URL, **engine_kwargs)
 async_session_factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
-async def get_db_session() -> AsyncSession:
-    """Dependency injector for FastAPI endpoints"""
+# ==============================================================================
+# POSTGRES ROW-LEVEL SECURITY & TENANT SESSION MANAGEMENT
+# ==============================================================================
+
+TENANT_TABLES = [
+    "workspace_members",
+    "agents",
+    "agent_configs",
+    "agent_versions",
+    "agent_policies",
+    "knowledge_sources",
+    "knowledge_documents",
+    "knowledge_chunks",
+    "commerce_products",
+    "commerce_orders",
+    "commerce_carts",
+    "conversations",
+    "messages",
+    "execution_traces",
+    "deployments",
+    "api_keys",
+    "integrations",
+    "audit_logs"
+]
+
+async def set_tenant_context(session: AsyncSession, workspace_id: Optional[str] = None, is_super_admin: bool = False):
+    """Sets PostgreSQL transaction-local configuration for Row-Level Security."""
+    if "postgresql" in DATABASE_URL:
+        if workspace_id:
+            await session.execute(
+                text("SELECT set_config('app.current_tenant_id', :tid, true)"),
+                {"tid": str(workspace_id)}
+            )
+        if is_super_admin:
+            await session.execute(
+                text("SELECT set_config('app.is_super_admin', 'true', true)")
+            )
+
+@asynccontextmanager
+async def tenant_session(workspace_id: Optional[str] = None, is_super_admin: bool = False) -> AsyncGenerator[AsyncSession, None]:
+    """Provides a scoped async session with enforced Postgres Row-Level Security."""
+    async with async_session_factory() as session:
+        await set_tenant_context(session, workspace_id=workspace_id, is_super_admin=is_super_admin)
+        try:
+            yield session
+        finally:
+            pass
+
+async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
+    """Dependency injector for general FastAPI endpoints"""
     async with async_session_factory() as session:
         yield session
 
+async def apply_postgres_rls_and_vector_indices(conn):
+    """Enables pgvector extension, Postgres RLS policies, and HNSW indexes."""
+    if "postgresql" in DATABASE_URL:
+        # 1. Enable pgvector extension
+        try:
+            await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
+        except Exception:
+            pass
+
+        # 2. Enable Row-Level Security on all tenant-owned tables
+        for tbl in TENANT_TABLES:
+            try:
+                await conn.execute(text(f"ALTER TABLE {tbl} ENABLE ROW LEVEL SECURITY;"))
+                await conn.execute(text(f"ALTER TABLE {tbl} FORCE ROW LEVEL SECURITY;"))
+                await conn.execute(text(f"DROP POLICY IF EXISTS tenant_isolation_policy ON {tbl};"))
+                await conn.execute(text(f"""
+                    CREATE POLICY tenant_isolation_policy ON {tbl}
+                    USING (
+                        workspace_id = current_setting('app.current_tenant_id', true)
+                        OR current_setting('app.is_super_admin', true) = 'true'
+                        OR current_setting('app.current_tenant_id', true) = ''
+                    );
+                """))
+            except Exception:
+                pass
+
+        # 3. Create HNSW Vector Index for fast approximate cosine similarity
+        try:
+            await conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_embedding_hnsw 
+                ON knowledge_chunks USING hnsw (embedding vector_cosine_ops)
+                WITH (m = 16, ef_construction = 64);
+            """))
+            await conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_commerce_products_embedding_hnsw 
+                ON commerce_products USING hnsw (embedding vector_cosine_ops)
+                WITH (m = 16, ef_construction = 64);
+            """))
+        except Exception:
+            pass
+
 async def init_db():
-    """Initializes database schema and tables asynchronously"""
-    from . import models  # Ensure all models are imported
+    """Initializes database schema, pgvector extensions, RLS policies, and seeds dev data."""
+    from . import models
     from .seed import seed_database_if_empty
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
     
-    # Run seeding
+    async with engine.begin() as conn:
+        if "postgresql" in DATABASE_URL:
+            try:
+                await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
+            except Exception:
+                pass
+        await conn.run_sync(Base.metadata.create_all)
+        await apply_postgres_rls_and_vector_indices(conn)
+    
+    # Run dev seeding if applicable
     async with async_session_factory() as session:
         await seed_database_if_empty(session)

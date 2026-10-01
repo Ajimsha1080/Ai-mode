@@ -88,6 +88,7 @@ async def seed_database_if_empty(session: AsyncSession):
 
     session.add(AgentConfigModel(
         id="cfg_acme_01",
+        workspace_id=ws_acme.id,
         agent_id=agent_acme.id,
         model="sarvam-105b-conversations",
         temperature=0.3,
@@ -103,7 +104,8 @@ async def seed_database_if_empty(session: AsyncSession):
             workspace_id=ws_acme.id,
             title="UPF 50+ Sunscreen Performance Jacket",
             price=2499.00,
-            stock=42,
+            total_inventory=42,
+            in_stock=True,
             category="Outerwear",
             description="Ultra-lightweight UV-blocking techwear jacket with quick-dry cooling mesh."
         ),
@@ -112,7 +114,8 @@ async def seed_database_if_empty(session: AsyncSession):
             workspace_id=ws_acme.id,
             title="No-Sweat Anti-Odour Tech Tee",
             price=999.00,
-            stock=55,
+            total_inventory=55,
+            in_stock=True,
             category="T-Shirts",
             description="Seamless breathable bamboo-elastane blend with silver-ion antimicrobial finish."
         ),
@@ -121,7 +124,8 @@ async def seed_database_if_empty(session: AsyncSession):
             workspace_id=ws_acme.id,
             title="All-Day 4-Way Stretch Commuter Joggers",
             price=1899.00,
-            stock=30,
+            total_inventory=30,
+            in_stock=True,
             category="Bottoms",
             description="Water-repellent 4-way stretch joggers with zippered concealed security pockets."
         )
@@ -132,6 +136,7 @@ async def seed_database_if_empty(session: AsyncSession):
     session.add(OrderModel(
         id="ord_acme_10482",
         workspace_id=ws_acme.id,
+        order_number="#10482",
         customer_email="sarah.connor@example.com",
         total_amount=2499.00,
         currency="INR",
@@ -145,12 +150,14 @@ async def seed_database_if_empty(session: AsyncSession):
 
     doc_acme_1 = KnowledgeDocModel(
         id="doc_acme_ret",
+        workspace_id=ws_acme.id,
         source_id=ks_acme.id,
         title="Blue Tyga 7-Day Exchange & Warranty Policy.pdf",
         content="Blue Tyga Policy:\n1. 7-day hassle-free size exchanges and returns for unworn items with tags.\n2. Defective or damaged items are covered with instant free replacement."
     )
     doc_acme_2 = KnowledgeDocModel(
         id="doc_acme_ship",
+        workspace_id=ws_acme.id,
         source_id=ks_acme.id,
         title="Shipping, Prepaid Discounts & Pan-India Delivery.md",
         content="Free express shipping on all prepaid orders across India via Bluedart and Delhivery. Standard delivery takes 2 to 4 business days."
@@ -160,6 +167,7 @@ async def seed_database_if_empty(session: AsyncSession):
     chunks_acme = [
         KnowledgeChunkModel(
             id="chk_acme_01",
+            workspace_id=ws_acme.id,
             doc_id=doc_acme_1.id,
             chunk_index=0,
             text="Blue Tyga Return & Exchange Policy: Hassle-free 7-day exchange window for sizing and fit. Products must be unused with original tags intact.",
@@ -167,6 +175,7 @@ async def seed_database_if_empty(session: AsyncSession):
         ),
         KnowledgeChunkModel(
             id="chk_acme_02",
+            workspace_id=ws_acme.id,
             doc_id=doc_acme_1.id,
             chunk_index=1,
             text="Shipping Policy: Free express delivery across India for all prepaid orders above Rs 499. Cash on Delivery (COD) available with a nominal Rs 49 handling fee.",
@@ -212,6 +221,7 @@ async def seed_database_if_empty(session: AsyncSession):
 
     session.add(AgentConfigModel(
         id="cfg_tech_01",
+        workspace_id=ws_tech.id,
         agent_id=agent_tech.id,
         model="claude-3-5-sonnet",
         temperature=0.3,
@@ -227,7 +237,8 @@ async def seed_database_if_empty(session: AsyncSession):
             workspace_id=ws_tech.id,
             title="UltraBook Titanium 16 M3 Pro",
             price=2199.00,
-            stock=12,
+            total_inventory=12,
+            in_stock=True,
             category="Laptops",
             description="M3 Pro architecture with 32GB RAM, 1TB SSD, 120Hz Liquid Retina display."
         ),
@@ -236,7 +247,8 @@ async def seed_database_if_empty(session: AsyncSession):
             workspace_id=ws_tech.id,
             title="Chronos Smartwatch Gen 4",
             price=399.00,
-            stock=25,
+            total_inventory=25,
+            in_stock=True,
             category="Wearables",
             description="Sapphire glass, ECG monitoring, titanium bezel, 14-day battery reserve."
         )
@@ -247,6 +259,7 @@ async def seed_database_if_empty(session: AsyncSession):
     session.add(OrderModel(
         id="ord_tech_20991",
         workspace_id=ws_tech.id,
+        order_number="#20991",
         customer_email="buyer@technova.com",
         total_amount=2199.00,
         currency="USD",
@@ -260,6 +273,7 @@ async def seed_database_if_empty(session: AsyncSession):
 
     doc_tech_1 = KnowledgeDocModel(
         id="doc_tech_war",
+        workspace_id=ws_tech.id,
         source_id=ks_tech.id,
         title="TechNova 2-Year Hardware Replacement & AppleCare Equivalent.pdf",
         content="TechNova Electronics Policy: All certified laptops and smartwatches come with a 2-Year Instant Replacement Warranty covering battery degradation and screen failure. Returns on opened electronics are subject to a 14-day return window and 0% restocking fee when reset to factory settings."
@@ -268,6 +282,7 @@ async def seed_database_if_empty(session: AsyncSession):
 
     chunk_tech_1 = KnowledgeChunkModel(
         id="chk_tech_01",
+        workspace_id=ws_tech.id,
         doc_id=doc_tech_1.id,
         chunk_index=0,
         text="TechNova Electronics Policy: All certified laptops and smartwatches come with a 2-Year Instant Replacement Warranty covering battery degradation and screen failure. Returns on opened electronics are subject to a 14-day return window and 0% restocking fee when reset to factory settings.",
@@ -276,3 +291,4 @@ async def seed_database_if_empty(session: AsyncSession):
     session.add(chunk_tech_1)
 
     await session.commit()
+
