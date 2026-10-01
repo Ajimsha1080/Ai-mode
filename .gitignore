@@ -81,3 +81,7 @@ __pycache__/
 .idea/
 *.swp
 *.swo
+
+# Runtime caches
+data/.conv_cache.json
+.pytest_cache/

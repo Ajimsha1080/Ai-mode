@@ -558,7 +558,11 @@ def parse_search_query(user_query: str, schema: Dict[str, Any], last_search_stat
     if is_pagination and last_search_state:
         page = int(last_search_state.get("page", 1)) + 1
         page_size = int(last_search_state.get("page_size", last_search_state.get("pageSize", page_size)))
-        original_query = last_search_state.get("original_query", clean_q)
+        original_query = last_search_state.get("original_query") or clean_q
+        if original_query and original_query != clean_q:
+            orig_clean = re.sub(r'[^\w\s\-\/₹$]', ' ', original_query.lower())
+            orig_tokens = [w for w in orig_clean.split() if len(w) >= 2 or w == 't']
+            content_tokens = [t for t in orig_tokens if t not in stopwords and not t.isdigit()]
         if not explicit_category:
             explicit_category = last_search_state.get("explicitCategory") or last_search_state.get("category")
         if not gender:
@@ -576,7 +580,7 @@ def parse_search_query(user_query: str, schema: Dict[str, Any], last_search_stat
         if not content_tokens and last_search_state.get("contentTokens"):
             content_tokens = last_search_state.get("contentTokens")
     elif is_refinement and last_search_state:
-        original_query = last_search_state.get("original_query", clean_q)
+        original_query = last_search_state.get("original_query") or clean_q
         if not explicit_category:
             explicit_category = last_search_state.get("explicitCategory") or last_search_state.get("category")
         if not gender:
@@ -614,11 +618,11 @@ def parse_search_query(user_query: str, schema: Dict[str, Any], last_search_stat
 # 5. HIGH-PERFORMANCE PRODUCT SEARCH & FILTERING
 # ============================================================================
 
-def search_products(workspace_id: str, query: str = "", category: Optional[str] = None, last_search_state: Optional[Dict[str, Any]] = None, **kwargs) -> Dict[str, Any]:
+def search_products(workspace_id: str, query: str = "", category: Optional[str] = None, last_search_state: Optional[Dict[str, Any]] = None, tenant_products: Optional[List[Dict[str, Any]]] = None, **kwargs) -> Dict[str, Any]:
     if not workspace_id:
         raise ValueError("workspace_id is mandatory for search_products")
 
-    all_prods = get_tenant_products_sync(workspace_id)
+    all_prods = tenant_products if tenant_products is not None else kwargs.get("tenant_products") or get_tenant_products_sync(workspace_id)
     schema = introspect_catalog_schema(all_prods)
     parsed = parse_search_query(query or "", schema, last_search_state)
 
@@ -638,12 +642,18 @@ def search_products(workspace_id: str, query: str = "", category: Optional[str] 
     query_for_scoring = (parsed["original_query"] if parsed["scope"] == "pagination" else query).lower().strip()
 
     # Non-existent item check (e.g. "shoes" in an apparel-only store)
-    non_semantic_tokens = [tok.lower() for tok in content_tokens if tok.lower() not in [
+    ignore_tokens = {
         "gym", "fitness", "workout", "sports", "dinner", "office", "casual", "wedding", "festive", "summer", "brother",
-        "men", "mens", "women", "womens", "cheap", "expensive", "red", "blue", "green", "black", "white", "yellow", "brown", "wine"
-    ]]
+        "men", "mens", "women", "womens", "cheap", "expensive", "cheaper", "red", "blue", "green", "black", "white", "yellow", "brown", "wine",
+        "outfit", "clothes", "clothing", "wear", "something", "anything", "nice", "attire", "look", "good",
+        "option", "options", "gift", "party", "event", "tonight", "today", "tomorrow", "going", "need", "want",
+        "recommendation", "recommendations", "style", "styling", "evening", "day", "night", "best", "popular",
+        "featured", "collection", "apparel", "items", "item", "product", "products", "stuff", "piece", "pieces",
+        "show", "find", "buy", "see", "any", "all", "more", "search", "give", "please", "can", "you"
+    }
+    non_semantic_tokens = [tok.lower() for tok in content_tokens if tok.lower() not in ignore_tokens]
 
-    if non_semantic_tokens and not explicit_category:
+    if non_semantic_tokens and not explicit_category and not semantic_terms:
         catalog_has_token = False
         for p in all_prods:
             p_text = f"{p.get('title', '')} {p.get('category', '')} {' '.join(p.get('tags', []))} {p.get('description', '')}".lower()
@@ -769,11 +779,25 @@ def search_products(workspace_id: str, query: str = "", category: Optional[str] 
 
         for sem in semantic_terms:
             if sem in t_low:
-                lexical += 35.0
+                lexical += 45.0
             if any(sem in t for t in tags_low):
-                lexical += 25.0
+                lexical += 40.0
             if sem in d_low:
-                lexical += 15.0
+                lexical += 25.0
+
+        if color:
+            color_synonyms = {
+                "red": ["red", "wine", "maroon", "crimson", "burgundy", "coral"],
+                "blue": ["blue", "navy", "indigo", "teal"],
+                "green": ["green", "emerald", "olive", "sage", "evergreen"],
+                "black": ["black", "stealth", "obsidian", "dark"],
+                "white": ["white", "off-white", "off white", "ivory"],
+                "yellow": ["yellow", "mustard", "gold"],
+                "brown": ["brown", "khaki", "tan"]
+            }
+            family = [color.lower()] + color_synonyms.get(color.lower(), [])
+            if any(c in full for c in family):
+                lexical += 50.0
 
         if explicit_category and c_low == explicit_category.lower():
             lexical += 40.0
@@ -785,24 +809,23 @@ def search_products(workspace_id: str, query: str = "", category: Optional[str] 
 
         return (lexical * 0.65) + (dense_score * 100.0 * 0.35) + (5.0 if p.get("in_stock", True) else 0.0)
 
-    if content_tokens or explicit_category or semantic_terms or color or gender:
-        min_thresh = 40.0 if len(content_tokens) >= 2 else 15.0
+    if (content_tokens or semantic_terms) and not explicit_category and not (min_price or max_price or color or gender or sort != "relevance"):
         scored = [(compute_score(p), p) for p in candidates]
-        max_s = max([s for s, _ in scored]) if scored else 0.0
-        if max_s >= min_thresh:
-            candidates = [p for s, p in scored if s >= min_thresh and (len(content_tokens) < 2 or s >= max_s * 0.35)]
-        else:
-            candidates = []
+        if scored:
+            max_s = max(s for s, _ in scored)
+            min_thresh = 20.0
+            if max_s >= min_thresh:
+                candidates = [p for s, p in scored if s >= min_thresh and (s >= max_s * 0.3)]
 
     # Sorting
     if sort == "price_asc":
-        candidates.sort(key=lambda x: x["price"])
+        candidates.sort(key=lambda x: (x.get("price", 0), x.get("id", "")))
     elif sort == "price_desc":
-        candidates.sort(key=lambda x: x["price"], reverse=True)
+        candidates.sort(key=lambda x: (-x.get("price", 0), x.get("id", "")))
     elif sort == "newest":
-        candidates.sort(key=lambda x: str(x.get("created_at", "")), reverse=True)
+        candidates.sort(key=lambda x: (str(x.get("created_at", "")), x.get("id", "")), reverse=True)
     else:
-        candidates.sort(key=lambda x: compute_score(x), reverse=True)
+        candidates.sort(key=lambda x: (compute_score(x), x.get("id", "")), reverse=True)
 
     # Deduplication
     seen_ids = set()
@@ -822,6 +845,7 @@ def search_products(workspace_id: str, query: str = "", category: Optional[str] 
     has_more = (start_idx + len(paged)) < total_matches
 
     applied = {
+        "original_query": parsed.get("original_query", ""),
         "category": explicit_category,
         "gender": gender,
         "min_price": min_price,
@@ -917,8 +941,10 @@ def order_tracking(workspace_id: str, order_number: str, customer_email: Optiona
     ).model_dump()
 
 
-def coupon_validation(workspace_id: str, coupon_code: str, cart_subtotal: float) -> Dict[str, Any]:
-    code_u = coupon_code.strip().upper()
+def coupon_validation(workspace_id: str, coupon_code: Optional[str] = None, cart_subtotal: Optional[float] = None, code: Optional[str] = None, subtotal: Optional[float] = None, order_total: Optional[float] = None, **kwargs) -> Dict[str, Any]:
+    c_code = coupon_code or code or kwargs.get("coupon_code") or kwargs.get("code") or ""
+    c_subtotal = cart_subtotal if cart_subtotal is not None else subtotal if subtotal is not None else order_total if order_total is not None else kwargs.get("cart_subtotal", 0.0)
+    code_u = str(c_code).strip().upper()
     discounts = {
         "WELCOME10": 0.10,
         "SAVE20": 0.20,
@@ -928,7 +954,7 @@ def coupon_validation(workspace_id: str, coupon_code: str, cart_subtotal: float)
 
     if code_u in discounts:
         pct = discounts[code_u]
-        disc_val = round(cart_subtotal * pct, 2)
+        disc_val = round(float(c_subtotal) * pct, 2)
         return CouponValidationOutput(
             valid=True,
             code=code_u,
@@ -945,8 +971,8 @@ def coupon_validation(workspace_id: str, coupon_code: str, cart_subtotal: float)
         message=f"Coupon code '{code_u}' is invalid or expired."
     ).model_dump()
 
-def apply_discount(workspace_id: str, code: str, subtotal: float) -> Dict[str, Any]:
-    return coupon_validation(workspace_id, code, subtotal)
+def apply_discount(workspace_id: str, code: Optional[str] = None, subtotal: Optional[float] = None, **kwargs) -> Dict[str, Any]:
+    return coupon_validation(workspace_id, coupon_code=code, cart_subtotal=subtotal, **kwargs)
 
 
 def return_eligibility(workspace_id: str, order_number: str, customer_email: Optional[str] = None, product_id: Optional[str] = None) -> Dict[str, Any]:
@@ -1061,13 +1087,16 @@ def human_handoff(workspace_id: str, reason: str = "Customer requested human sup
 # 7. DYNAMIC TOOL DISPATCHER
 # ============================================================================
 
-def execute_typed_tool(tool_name: str, arguments: Dict[str, Any], workspace_id: str) -> Dict[str, Any]:
+def execute_typed_tool(tool_name: str, arguments: Dict[str, Any], workspace_id: str, **kwargs) -> Dict[str, Any]:
     """Executes a tool call with strict typing, tenant isolation, and schema validation."""
     if not workspace_id:
         raise ValueError("workspace_id is mandatory for tool execution")
 
     args = dict(arguments)
     args["workspace_id"] = workspace_id
+    for k, v in kwargs.items():
+        if k not in args:
+            args[k] = v
 
     dispatch_map = {
         "search_products": lambda: search_products(**args),

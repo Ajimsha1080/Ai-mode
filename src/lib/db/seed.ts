@@ -1,7 +1,6 @@
 import bcrypt from 'bcryptjs';
 import { db } from './index';
 import { AgentConfig, Tool } from '@/types';
-import { generateEmbedding, chunkText } from '../rag';
 
 export const STANDARD_TOOLS: Tool[] = [
   {

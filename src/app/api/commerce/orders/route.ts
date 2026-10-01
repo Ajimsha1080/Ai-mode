@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
-import { getAuthSession } from '@/lib/auth';
+import { getAuthSession, createServiceJwt } from '@/lib/auth';
 import { db } from '@/lib/db';
-import { commerceEngine } from '@/lib/commerce';
 
+const PYTHON_BACKEND_URL = process.env.PYTHON_BACKEND_URL || 'http://127.0.0.1:8000';
 const orderRateLimitMap = new Map<string, number[]>();
 
 function checkOrderRateLimit(key: string, limit: number = 10, windowMs: number = 60000): boolean {
@@ -40,7 +40,26 @@ export async function GET(req: Request) {
         { status: 400 }
       );
     }
-    const order = await commerceEngine.getOrder(session.workspaceId, orderNumber, customerEmail);
+
+    const serviceToken = await createServiceJwt(session.workspaceId, session.user.id, session.role);
+    try {
+      const pyRes = await fetch(`${PYTHON_BACKEND_URL}/api/v1/orders/${encodeURIComponent(orderNumber)}?customer_email=${encodeURIComponent(customerEmail)}`, {
+        headers: { 'Authorization': `Bearer ${serviceToken}` },
+        signal: AbortSignal.timeout(5000)
+      });
+      if (pyRes.ok) {
+        const order = await pyRes.json();
+        return NextResponse.json({ order });
+      }
+    } catch {}
+
+    // Database lookup fallback
+    const order = db.commerce_orders.find(o => 
+      o.workspace_id === session.workspaceId &&
+      o.order_number.toLowerCase() === orderNumber.toLowerCase() &&
+      o.customer_email.toLowerCase() === customerEmail.toLowerCase()
+    );
+
     if (!order) {
       return NextResponse.json(
         { error: { message: 'Order not found with the provided email address.' } },
@@ -53,5 +72,3 @@ export async function GET(req: Request) {
   const orders = db.commerce_orders.filter(o => o.workspace_id === session.workspaceId);
   return NextResponse.json({ orders });
 }
-
-

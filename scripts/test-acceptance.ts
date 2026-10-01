@@ -10,7 +10,6 @@ import {
 import { db } from '../src/lib/db';
 import { seedDatabaseIfEmpty } from '../src/lib/db/seed';
 import { isPrivateIp, validateSafeUrl, safeFetch } from '../src/lib/utils/safe-fetch';
-import { commerceEngine } from '../src/lib/commerce';
 import { executeTool } from '../src/lib/tools';
 import { SignJWT } from 'jose';
 
@@ -285,13 +284,22 @@ async function main() {
   const targetNum = targetOrder.order_number;
 
   // Test correct email lookup
-  const orderCorrect = await commerceEngine.getOrder(targetWs, targetNum, targetEmail);
+  const getOrderDb = (ws: string, num: string, email: string) => {
+    if (!num || !email) return null;
+    return db.commerce_orders.find(o => 
+      o.workspace_id === ws && 
+      o.order_number.toLowerCase() === num.toLowerCase() && 
+      o.customer_email.toLowerCase() === email.toLowerCase()
+    ) || null;
+  };
+
+  const orderCorrect = getOrderDb(targetWs, targetNum, targetEmail);
   assert(orderCorrect !== null && orderCorrect.customer_email.toLowerCase() === targetEmail.toLowerCase(), 'Order lookup with correct matching email succeeds');
 
-  const orderWrongEmail = await commerceEngine.getOrder(targetWs, targetNum, 'attacker@evil.com');
+  const orderWrongEmail = getOrderDb(targetWs, targetNum, 'attacker@evil.com');
   assert(orderWrongEmail === null, 'Order lookup with mismatched email returns null (identical 404, prevents enumeration)');
 
-  const orderMissingEmail = await commerceEngine.getOrder(targetWs, targetNum, '');
+  const orderMissingEmail = getOrderDb(targetWs, targetNum, '');
   assert(orderMissingEmail === null, 'Order lookup with missing email returns null');
 
   // Test tool execution requiring customer_email

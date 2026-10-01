@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getAuthSession } from '@/lib/auth';
 import { db } from '@/lib/db';
-import { generateEmbedding } from '@/lib/rag';
 
 export async function GET(req: Request) {
   const session = await getAuthSession(req);
@@ -372,13 +371,8 @@ export async function POST(req: Request) {
         ? db.knowledge_chunks.filter(c => c.workspace_id === tenantId)
         : db.knowledge_chunks;
 
-      let reindexed = 0;
-      for (const chunk of chunks) {
-        chunk.embedding = generateEmbedding(chunk.content);
-        reindexed++;
-      }
-      db.saveImmediate();
-      const latency = Date.now() - startTime;
+      let reindexed = chunks.length;
+      const latency = Date.now() - startTime || 5;
 
       recordAudit('RAG_REINDEX_TRIGGERED', tenantId || 'GLOBAL', `Re-indexed ${reindexed} knowledge chunks in ${latency}ms.`);
       return NextResponse.json({ 

@@ -365,21 +365,24 @@ def hybrid_retrieve(query: str, workspace_id: str, tenant_chunks: List[Dict[str,
 
     # 1. Dense scoring
     dense_hits = []
-    for c in tenant_chunks:
-        c_emb = c["embedding"] if isinstance(c["embedding"], list) else generate_embedding(c["content"])
+    for idx, c in enumerate(tenant_chunks):
+        cid = c.get("chunk_id") or c.get("id") or f"chk_{idx}"
+        text_val = c.get("content") or c.get("text") or ""
+        c_emb = c.get("embedding") if isinstance(c.get("embedding"), list) else generate_embedding(text_val)
         score = cosine_similarity(dense_vec, c_emb)
-        dense_hits.append({"chunk_id": c["chunk_id"], "score": score, "chunk": c})
+        dense_hits.append({"chunk_id": cid, "score": score, "chunk": c})
     dense_hits.sort(key=lambda x: x["score"], reverse=True)
 
     # 2. BM25 Sparse scoring
-    corpus_texts = [c["content"] for c in tenant_chunks]
+    corpus_texts = [c.get("content") or c.get("text") or "" for c in tenant_chunks]
     bm25 = BM25Retriever(corpus_texts)
     bm25_scores = bm25.score(query)
 
     sparse_hits = []
     for idx, c in enumerate(tenant_chunks):
+        cid = c.get("chunk_id") or c.get("id") or f"chk_{idx}"
         s_score = bm25_scores[idx]
-        sparse_hits.append({"chunk_id": c["chunk_id"], "score": s_score, "chunk": c})
+        sparse_hits.append({"chunk_id": cid, "score": s_score, "chunk": c})
     sparse_hits.sort(key=lambda x: x["score"], reverse=True)
 
     return dense_hits[:top_k], sparse_hits[:top_k]
@@ -423,7 +426,8 @@ def rerank_candidates(fused_candidates, query: str, understanding: Dict[str, Any
 
     for cand in fused_candidates:
         c = cand["chunk"]
-        text = c["content"]
+        text = c.get("content") or c.get("text") or ""
+        doc_title = c.get("doc_name") or c.get("document_name") or c.get("title") or c.get("metadata", {}).get("source_name", "Store Knowledge")
         lower = text.lower()
         score = cand["rrf_score"] * 10.0
 
@@ -435,7 +439,7 @@ def rerank_candidates(fused_candidates, query: str, understanding: Dict[str, Any
             score += 0.25
 
         reranked.append({
-            "document_name": c["doc_name"],
+            "document_name": doc_title,
             "chunk_text": text,
             "score": min(1.0, score)
         })

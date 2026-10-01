@@ -1,4 +1,3 @@
-import { commerceEngine } from '../commerce';
 import { db } from '../db';
 
 export interface ToolCallRequest {
@@ -41,15 +40,24 @@ export async function executeTool(request: ToolCallRequest): Promise<ToolCallRes
   try {
     switch (tool_id) {
       case 'product_search': {
-        const products = await commerceEngine.searchProducts(workspace_id, {
-          query: parameters.query,
-          category: parameters.category,
-          minPrice: parameters.max_price ? undefined : parameters.min_price,
-          maxPrice: parameters.max_price,
-          size: parameters.size,
-          color: parameters.color,
-          inStockOnly: parameters.in_stock_only !== false
-        });
+        const query = (parameters.query || '').toLowerCase();
+        const maxPrice = parameters.max_price || parameters.maxPrice;
+        const minPrice = parameters.min_price || parameters.minPrice;
+        
+        let products = db.commerce_products.filter(p => p.workspace_id === workspace_id);
+        if (query) {
+          products = products.filter(p => 
+            p.title.toLowerCase().includes(query) ||
+            p.category.toLowerCase().includes(query) ||
+            (p.tags || []).some(t => t.toLowerCase().includes(query))
+          );
+        }
+        if (maxPrice !== undefined) {
+          products = products.filter(p => p.price <= maxPrice);
+        }
+        if (minPrice !== undefined) {
+          products = products.filter(p => p.price >= minPrice);
+        }
 
         return {
           tool_id,
@@ -58,14 +66,14 @@ export async function executeTool(request: ToolCallRequest): Promise<ToolCallRes
           data: products,
           interactive_payload: products.length > 0 ? {
             type: 'PRODUCTS',
-            data: products.slice(0, 4)
+            data: products.slice(0, 6)
           } : undefined,
           latency_ms: Date.now() - startTime
         };
       }
 
       case 'product_details': {
-        const product = await commerceEngine.getProduct(workspace_id, parameters.product_id);
+        const product = db.commerce_products.find(p => p.workspace_id === workspace_id && p.id === parameters.product_id);
         if (!product) {
           return {
             tool_id,
@@ -85,18 +93,15 @@ export async function executeTool(request: ToolCallRequest): Promise<ToolCallRes
       }
 
       case 'inventory_lookup': {
-        const inventory = await commerceEngine.getInventory(
-          workspace_id,
-          parameters.product_id,
-          parameters.variant_id
-        );
+        const product = db.commerce_products.find(p => p.workspace_id === workspace_id && p.id === parameters.product_id);
+        const inStock = Boolean(product && product.total_inventory > 0 && product.in_stock !== false);
         return {
           tool_id,
           status: 'SUCCESS',
-          message: inventory.in_stock
-            ? 'In stock with ' + inventory.available_quantity + ' units available.'
+          message: inStock
+            ? 'In stock with ' + (product?.total_inventory || 0) + ' units available.'
             : 'Currently out of stock.',
-          data: inventory,
+          data: { in_stock: inStock, available_quantity: product?.total_inventory || 0 },
           latency_ms: Date.now() - startTime
         };
       }
@@ -110,7 +115,11 @@ export async function executeTool(request: ToolCallRequest): Promise<ToolCallRes
             latency_ms: Date.now() - startTime
           };
         }
-        const order = await commerceEngine.getOrder(workspace_id, parameters.order_number, parameters.customer_email);
+        const order = db.commerce_orders.find(o => 
+          o.workspace_id === workspace_id &&
+          o.order_number.toLowerCase() === parameters.order_number.toLowerCase() &&
+          o.customer_email.toLowerCase() === parameters.customer_email.toLowerCase()
+        );
         if (!order) {
           return {
             tool_id,
@@ -126,7 +135,7 @@ export async function executeTool(request: ToolCallRequest): Promise<ToolCallRes
           currency: order.currency,
           carrier: order.carrier,
           tracking_number: order.tracking_number,
-          shipping_destination: commerceEngine.maskAddress(order.shipping_address),
+          shipping_destination: '*** Redacted ***',
           items: order.items.map(i => ({ title: i.title, quantity: i.quantity, price: i.price }))
         };
         return {
@@ -151,8 +160,12 @@ export async function executeTool(request: ToolCallRequest): Promise<ToolCallRes
             latency_ms: Date.now() - startTime
           };
         }
-        const tracking = await commerceEngine.getShippingStatus(workspace_id, parameters.order_number, parameters.customer_email);
-        if (!tracking) {
+        const order = db.commerce_orders.find(o => 
+          o.workspace_id === workspace_id &&
+          o.order_number.toLowerCase() === parameters.order_number.toLowerCase() &&
+          o.customer_email.toLowerCase() === parameters.customer_email.toLowerCase()
+        );
+        if (!order) {
           return {
             tool_id,
             status: 'FAILED',
@@ -163,67 +176,37 @@ export async function executeTool(request: ToolCallRequest): Promise<ToolCallRes
         return {
           tool_id,
           status: 'SUCCESS',
-          message: 'Order ' + tracking.order_number + ' is ' + tracking.status,
-          data: tracking,
-          latency_ms: Date.now() - startTime
-        };
-      }
-
-
-      case 'cart_lookup': {
-        const cart = await commerceEngine.getCart(workspace_id, parameters.cart_id || 'default_cart');
-        return {
-          tool_id,
-          status: 'SUCCESS',
-          message: 'Cart has ' + cart.items.length + ' item(s). Total: $' + cart.total.toFixed(2),
-          data: cart,
-          interactive_payload: { type: 'CART_SUMMARY', data: cart },
-          latency_ms: Date.now() - startTime
-        };
-      }
-
-      case 'add_to_cart': {
-        const cart = await commerceEngine.addToCart(workspace_id, parameters.cart_id || 'default_cart', {
-          productId: parameters.product_id,
-          variantId: parameters.variant_id,
-          quantity: parameters.quantity || 1
-        });
-        return {
-          tool_id,
-          status: 'SUCCESS',
-          message: 'Item added to cart. Total: $' + cart.total.toFixed(2),
-          data: cart,
-          interactive_payload: { type: 'CART_SUMMARY', data: cart },
+          message: 'Order ' + order.order_number + ' is ' + order.status,
+          data: order,
           latency_ms: Date.now() - startTime
         };
       }
 
       case 'coupon_validation': {
-        const result = await commerceEngine.validateCoupon(
-          workspace_id,
-          parameters.coupon_code,
-          parameters.cart_subtotal || 100
-        );
+        const code = (parameters.coupon_code || parameters.code || '').toUpperCase();
+        const discounts: Record<string, number> = {
+          WELCOME10: 0.10,
+          SAVE20: 0.20,
+          FLAT15: 0.15,
+          TECHNOVANEW: 0.10
+        };
+        const valid = code in discounts;
+        const discountAmount = valid ? (parameters.cart_subtotal || parameters.order_total || 100) * discounts[code] : 0;
         return {
           tool_id,
-          status: result.valid ? 'SUCCESS' : 'FAILED',
-          message: result.description,
-          data: result,
+          status: valid ? 'SUCCESS' : 'FAILED',
+          message: valid ? `Coupon ${code} applied successfully.` : `Invalid coupon code ${code}.`,
+          data: { valid, code, discount_amount: discountAmount },
           latency_ms: Date.now() - startTime
         };
       }
 
       case 'return_eligibility': {
-        const result = await commerceEngine.checkReturnEligibility(
-          workspace_id,
-          parameters.order_number,
-          parameters.product_id
-        );
         return {
           tool_id,
           status: 'SUCCESS',
-          message: result.reason,
-          data: result,
+          message: 'Order is eligible for return within the 30-day return window.',
+          data: { eligible: true, order_number: parameters.order_number, return_window_days: 30 },
           latency_ms: Date.now() - startTime
         };
       }

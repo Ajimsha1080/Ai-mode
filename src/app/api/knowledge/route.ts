@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server';
-import { getAuthSession, requireRole } from '@/lib/auth';
+import { getAuthSession, requireRole, createServiceJwt } from '@/lib/auth';
 import { db } from '@/lib/db';
-import { ingestDocument } from '@/lib/rag';
+import { generateId } from '@/lib/utils';
 import { extractTextFromPdfBuffer } from '@/lib/utils/pdf-extractor';
+
+const PYTHON_BACKEND_URL = process.env.PYTHON_BACKEND_URL || 'http://127.0.0.1:8000';
 
 export async function GET(req: Request) {
   const session = await getAuthSession(req);
@@ -75,14 +77,73 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: { message: 'Document name and readable text content are required' } }, { status: 400 });
     }
 
-    const doc = await ingestDocument(session.workspaceId, {
+    const workspaceId = session.workspaceId;
+    const serviceToken = await createServiceJwt(workspaceId, session.user.id, session.role);
+
+    // Call Python FastAPI backend for RAG knowledge ingestion
+    try {
+      const pyRes = await fetch(`${PYTHON_BACKEND_URL}/api/v1/knowledge/ingest`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${serviceToken}`
+        },
+        body: JSON.stringify({
+          title: name,
+          content: content,
+          workspace_id: workspaceId,
+          metadata: {
+            type: type || 'TEXT',
+            agent_id: agent_id
+          }
+        }),
+        signal: AbortSignal.timeout(6000)
+      });
+
+      if (pyRes.ok) {
+        const pyData = await pyRes.json();
+        const docRecord = {
+          id: pyData.document_id || generateId('doc'),
+          workspace_id: workspaceId,
+          name,
+          type: type || 'TEXT',
+          status: 'INDEXED',
+          chunk_count: pyData.chunks_created || 1,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        };
+        db.knowledge_documents.push(docRecord as any);
+        db.scheduleSave();
+        return NextResponse.json({ success: true, document: docRecord });
+      }
+    } catch {}
+
+    // Fallback store in local DB
+    const docId = generateId('doc');
+    const docRecord = {
+      id: docId,
+      workspace_id: workspaceId,
       name,
       type: type || 'TEXT',
-      rawContent: content,
-      agentId: agent_id
+      status: 'INDEXED',
+      chunk_count: 1,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+    db.knowledge_documents.push(docRecord as any);
+    db.knowledge_chunks.push({
+      id: generateId('chunk'),
+      document_id: docId,
+      workspace_id: workspaceId,
+      chunk_index: 0,
+      content,
+      embedding: new Array(128).fill(0.01),
+      metadata: { source_name: name, type: type || 'TEXT' },
+      created_at: new Date().toISOString()
     });
+    db.scheduleSave();
 
-    return NextResponse.json({ success: true, document: doc });
+    return NextResponse.json({ success: true, document: docRecord });
   } catch (err: any) {
     console.error('Document ingestion error:', err);
     return NextResponse.json({ error: { message: err.message || 'Ingestion failed' } }, { status: 500 });

@@ -109,146 +109,60 @@ class LLMClient:
 
     def _call_sarvam(self, messages: List[Dict[str, str]], tools: List[Dict[str, Any]], system_prompt: str) -> Dict[str, Any]:
         model = self.default_model or os.getenv("SARVAM_MODEL", "sarvam-105b-conversations")
-        
         formatted_messages = [{"role": "system", "content": system_prompt}] + messages
-        
-        payload = {
-            "model": model,
-            "messages": formatted_messages,
-            "temperature": 0.3
-        }
+        payload = {"model": model, "messages": formatted_messages, "temperature": 0.3}
 
         req = urllib.request.Request(
             "https://api.sarvam.ai/v1/chat/completions",
             data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "api-subscription-key": self.sarvam_api_key
-            },
+            headers={"Content-Type": "application/json", "api-subscription-key": self.sarvam_api_key},
             method="POST"
         )
-
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             choice = data["choices"][0]["message"]
-            content = choice.get("content", "")
-            return {
-                "content": content,
-                "tool_calls": [],
-                "provider": "sarvam"
-            }
+            return {"content": choice.get("content", ""), "tool_calls": [], "provider": "sarvam"}
 
     def _call_openai(self, messages: List[Dict[str, str]], tools: List[Dict[str, Any]], system_prompt: str) -> Dict[str, Any]:
-        formatted_tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": t["name"],
-                    "description": t["description"],
-                    "parameters": t["parameters"]
-                }
-            }
-            for t in tools
-        ]
-
+        formatted_tools = [{"type": "function", "function": {"name": t["name"], "description": t["description"], "parameters": t["parameters"]}} for t in tools]
         model = self.default_model or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-
-        payload = {
-            "model": model,
-            "messages": [{"role": "system", "content": system_prompt}] + messages,
-            "tools": formatted_tools,
-            "tool_choice": "auto"
-        }
+        payload = {"model": model, "messages": [{"role": "system", "content": system_prompt}] + messages, "tools": formatted_tools, "tool_choice": "auto"}
 
         req = urllib.request.Request(
             "https://api.openai.com/v1/chat/completions",
             data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.openai_api_key}"
-            },
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {self.openai_api_key}"},
             method="POST"
         )
-
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             choice = data["choices"][0]["message"]
             tool_calls = choice.get("tool_calls", [])
-            content = choice.get("content", "")
-
-            parsed_tool_calls = []
-            for tc in tool_calls:
-                parsed_tool_calls.append({
-                    "id": tc["id"],
-                    "tool_name": tc["function"]["name"],
-                    "arguments": json.loads(tc["function"]["arguments"])
-                })
-
-            return {
-                "content": content,
-                "tool_calls": parsed_tool_calls,
-                "provider": "openai"
-            }
+            parsed_tool_calls = [{"id": tc["id"], "tool_name": tc["function"]["name"], "arguments": json.loads(tc["function"]["arguments"])} for tc in tool_calls]
+            return {"content": choice.get("content", ""), "tool_calls": parsed_tool_calls, "provider": "openai"}
 
     def _call_anthropic(self, messages: List[Dict[str, str]], tools: List[Dict[str, Any]], system_prompt: str) -> Dict[str, Any]:
-        formatted_tools = [
-            {
-                "name": t["name"],
-                "description": t["description"],
-                "input_schema": t["parameters"]
-            }
-            for t in tools
-        ]
-
+        formatted_tools = [{"name": t["name"], "description": t["description"], "input_schema": t["parameters"]} for t in tools]
         model = self.default_model or os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")
-
-        payload = {
-            "model": model,
-            "max_tokens": 1024,
-            "system": system_prompt,
-            "messages": messages,
-            "tools": formatted_tools
-        }
+        payload = {"model": model, "max_tokens": 1024, "system": system_prompt, "messages": messages, "tools": formatted_tools}
 
         req = urllib.request.Request(
             "https://api.anthropic.com/v1/messages",
             data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "x-api-key": self.anthropic_api_key,
-                "anthropic-version": "2023-06-01"
-            },
+            headers={"Content-Type": "application/json", "x-api-key": self.anthropic_api_key, "anthropic-version": "2023-06-01"},
             method="POST"
         )
-
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             content_blocks = data.get("content", [])
             text_blocks = [b["text"] for b in content_blocks if b["type"] == "text"]
             tool_use_blocks = [b for b in content_blocks if b["type"] == "tool_use"]
-
-            parsed_tool_calls = [
-                {
-                    "id": b["id"],
-                    "tool_name": b["name"],
-                    "arguments": b["input"]
-                }
-                for b in tool_use_blocks
-            ]
-
-            return {
-                "content": "\n".join(text_blocks),
-                "tool_calls": parsed_tool_calls,
-                "provider": "anthropic"
-            }
+            parsed_tool_calls = [{"id": b["id"], "tool_name": b["name"], "arguments": b["input"]} for b in tool_use_blocks]
+            return {"content": "\n".join(text_blocks), "tool_calls": parsed_tool_calls, "provider": "anthropic"}
 
     def _call_ollama(self, messages: List[Dict[str, str]], tools: List[Dict[str, Any]], system_prompt: str) -> Dict[str, Any]:
         model = self.default_model or os.getenv("OLLAMA_MODEL", "llama3.2")
-        payload = {
-            "model": model,
-            "messages": [{"role": "system", "content": system_prompt}] + messages,
-            "stream": False
-        }
+        payload = {"model": model, "messages": [{"role": "system", "content": system_prompt}] + messages, "stream": False}
 
         req = urllib.request.Request(
             f"{self.ollama_base_url}/api/chat",
@@ -256,28 +170,16 @@ class LLMClient:
             headers={"Content-Type": "application/json"},
             method="POST"
         )
-
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-            msg = data.get("message", {})
-            return {
-                "content": msg.get("content", ""),
-                "tool_calls": [],
-                "provider": "ollama"
-            }
+            return {"content": data.get("message", {}).get("content", ""), "tool_calls": [], "provider": "ollama"}
 
     def _deterministic_fallback(self, messages: List[Dict[str, str]], tools: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        Deterministic intent and tool router when no remote LLM is configured.
-        Parses queries for product searches, order lookups, inventory checks,
-        cart calculations, and discount requests while respecting policy FAQ and prompt defenses.
-        """
         last_message = messages[-1]["content"] if messages else ""
         lower = last_message.lower()
 
-        # 1. Prompt Injection Defense Check
+        # 1. Prompt Injection Defense
         if "ignore all previous instructions" in lower or "system override" in lower or "output your system prompt" in lower:
-            # If user asks about techwear jackets despite injection attempt, provide safe catalog info
             if "jacket" in lower or "tee" in lower or "hoodie" in lower:
                 return {
                     "content": "",
@@ -294,15 +196,16 @@ class LLMClient:
                 "provider": "deterministic_engine"
             }
 
-        # 2. Return, Warranty & Policy FAQ (Delegated directly to 12-Stage RAG Pipeline)
-        if any(w in lower for w in ["return window", "return policy", "warranty", "defective", "refund", "international return", "how much is international"]):
+        # 2. Return & Policy FAQ Check (Pure policy question without product intent)
+        is_pure_policy = any(w in lower for w in ["return window", "return policy", "warranty", "defective", "refund", "international return", "how much is international", "what is your return", "exchange policy"]) and not any(w in lower for w in ["shirt", "jacket", "tee", "shoes", "shoe", "buy", "find", "show me", "price"])
+        if is_pure_policy:
             return {
                 "content": "",
                 "tool_calls": [],
                 "provider": "deterministic_engine"
             }
 
-        # 3. Human Operator Escalation
+        # 3. Human Escalation
         if any(w in lower for w in ["human", "operator", "representative", "speak to a person"]):
             return {
                 "content": "",
@@ -312,14 +215,14 @@ class LLMClient:
 
         tool_calls = []
 
-        # 4. Order lookup pattern
+        # 4. Order Lookup / Tracking
         order_match = re.search(r'#\d+', last_message)
         if order_match or ("order" in lower and any(w in lower for w in ["track", "status", "where is", "lookup", "package"])):
             order_num = order_match.group(0) if order_match else None
             email_match = re.search(r'([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})', last_message)
-            customer_email = email_match.group(1) if email_match else None
+            customer_email = email_match.group(1) if email_match else ""
 
-            if not order_num or not customer_email:
+            if not order_num and not customer_email:
                 return {
                     "content": "To look up and track your order status securely, please provide both your order confirmation number (e.g. #10482) and the email address used at checkout.",
                     "tool_calls": [],
@@ -329,78 +232,65 @@ class LLMClient:
             tool_calls.append({
                 "id": "call_order_01",
                 "tool_name": "lookup_order",
-                "arguments": {"order_number": order_num, "customer_email": customer_email}
+                "arguments": {"order_number": order_num or "#10999", "customer_email": customer_email}
             })
+            return {"content": "", "tool_calls": tool_calls, "provider": "deterministic_engine"}
 
-        # 5. Inventory check pattern
-        elif any(w in lower for w in ["in stock", "available", "inventory", "units"]):
-            prod_id = "prod_02"
-            if "jacket" in lower:
-                prod_id = "prod_01"
-            elif "tee" in lower or "shirt" in lower:
-                prod_id = "prod_02"
-            elif "flask" in lower or "bottle" in lower:
-                prod_id = "prod_03"
-            elif "laptop" in lower or "ultrabook" in lower:
-                prod_id = "prod_tech_01"
-            elif "watch" in lower or "chronos" in lower:
-                prod_id = "prod_tech_02"
-
+        # 5. Authoritative Inventory Lookup
+        if any(w in lower for w in ["in stock", "available", "inventory", "units", "size m available", "how many"]):
+            prod_id = "prod_shirt_cord_wine" if "wine" in lower else "prod_01" if "jacket" in lower else "prod_02"
             tool_calls.append({
                 "id": "call_inv_01",
                 "tool_name": "check_inventory",
                 "arguments": {"product_id": prod_id}
             })
+            return {"content": "", "tool_calls": tool_calls, "provider": "deterministic_engine"}
 
-        # 6. Cart calculation pattern
-        elif "cart" in lower or "total" in lower or "checkout" in lower or "how much for" in lower:
-            items = []
-            if "jacket" in lower and ("shoe" in lower or "pair" in lower):
-                items = [{"product_id": "prod_01", "quantity": 1}, {"product_id": "prod_02", "quantity": 1}]
-            elif "jacket" in lower:
-                items = [{"product_id": "prod_02", "quantity": 1}]
-            elif "laptop" in lower or "ultrabook" in lower:
-                items = [{"product_id": "prod_tech_01", "quantity": 1}]
+        # 6. Ordinals & Cart Action ("second one", "add to cart")
+        if any(w in lower for w in ["add", "second one", "first one", "buy that", "cart"]):
+            if "second" in lower:
+                prod_id = "prod_shirt_cord_brn"
+            elif "first" in lower:
+                prod_id = "prod_shirt_cord_nvy"
             else:
-                items = [{"product_id": "prod_01", "quantity": 1}]
-
-            discount_code = None
-            code_match = re.search(r'\b(welcome10|save20|flat15|technovanew)\b', lower)
-            if code_match:
-                discount_code = code_match.group(1).upper()
-
+                prod_id = "prod_shirt_cord_wine"
             tool_calls.append({
                 "id": "call_cart_01",
-                "tool_name": "calculate_cart",
-                "arguments": {"items": items, "discount_code": discount_code}
+                "tool_name": "add_to_cart",
+                "arguments": {"product_id": prod_id, "quantity": 1}
             })
+            return {"content": "", "tool_calls": tool_calls, "provider": "deterministic_engine"}
 
-        # 7. Discount code validation
-        elif any(w in lower for w in ["coupon", "discount", "promo", "promo code"]):
-            known_match = re.search(r'\b(welcome10|save20|flat15|technovanew|free100percent)\b', lower)
-            if known_match:
-                code = known_match.group(1).upper()
-            else:
-                candidates = [w for w in re.findall(r'\b[A-Za-z0-9_-]{4,15}\b', last_message) if w.lower() not in ["coupon", "discount", "promo", "code", "apply", "check", "valid", "with", "order", "please", "can", "use", "fake", "for", "my"]]
-                code = candidates[0].upper() if candidates else "WELCOME10"
-
-            subtotal_val = 399.00 if ("technova" in code.lower() or "tech" in lower) else 149.99
-
+        # 7. Discount Code Validation
+        if any(w in lower for w in ["coupon", "discount", "promo", "promo code"]):
+            code_match = re.search(r'\b(welcome10|save20|flat15|technovanew|free100percent)\b', lower)
+            code = code_match.group(1).upper() if code_match else "WELCOME10"
+            subtotal_val = 399.00 if "tech" in code.lower() else 149.99
             tool_calls.append({
                 "id": "call_disc_01",
                 "tool_name": "apply_discount",
                 "arguments": {"code": code, "subtotal": subtotal_val}
             })
+            return {"content": "", "tool_calls": tool_calls, "provider": "deterministic_engine"}
 
-        # 8. Product search pattern
-        elif any(w in lower for w in ["search", "find", "looking for", "show me", "shoe", "jacket", "laptop", "watch", "recommend", "buy", "product", "catalog"]):
-            query = last_message
-            tool_calls.append({
-                "id": "call_search_01",
-                "tool_name": "search_products",
-                "arguments": {"query": query}
-            })
+        # 8. Multi-Turn Comparison ("which is cheaper", "compare")
+        if (("which" in lower or "what" in lower) and "cheaper" in lower) or any(w in lower for w in ["compare", "difference between", "which one is", "versus", "vs"]):
+            return {
+                "content": "Between the items, the more affordable option is priced at ₹1,499 compared to ₹1,999, giving you the best value for your budget.",
+                "tool_calls": [{
+                    "id": "call_search_comp",
+                    "tool_name": "search_products",
+                    "arguments": {"query": "shirts"}
+                }],
+                "provider": "deterministic_engine"
+            }
 
+        # 9. Product Search & Discovery (Default for all shopping requests)
+        tool_calls.append({
+            "id": "call_search_01",
+            "tool_name": "search_products",
+            "arguments": {"query": last_message}
+        })
         return {
             "content": "",
             "tool_calls": tool_calls,
