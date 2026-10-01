@@ -107,6 +107,7 @@ async def seed_database_if_empty(session: AsyncSession):
             total_inventory=42,
             in_stock=True,
             category="Outerwear",
+            tags=["jacket", "sunscreen", "upf50", "uvwear", "outerwear", "men"],
             description="Ultra-lightweight UV-blocking techwear jacket with quick-dry cooling mesh."
         ),
         ProductModel(
@@ -117,6 +118,7 @@ async def seed_database_if_empty(session: AsyncSession):
             total_inventory=55,
             in_stock=True,
             category="T-Shirts",
+            tags=["tshirt", "nosweat", "quick-dry", "activewear", "tee"],
             description="Seamless breathable bamboo-elastane blend with silver-ion antimicrobial finish."
         ),
         ProductModel(
@@ -127,7 +129,87 @@ async def seed_database_if_empty(session: AsyncSession):
             total_inventory=30,
             in_stock=True,
             category="Bottoms",
+            tags=["jogger", "pants", "bottoms", "stretch"],
             description="Water-repellent 4-way stretch joggers with zippered concealed security pockets."
+        ),
+        # Shirts Collection
+        ProductModel(
+            id="prod_shirt_cord_nvy",
+            workspace_id=ws_acme.id,
+            title="Corduroy Shirt: Navy",
+            price=1499.00,
+            total_inventory=40,
+            in_stock=True,
+            category="Shirts",
+            tags=["shirt", "corduroy", "men", "navy", "casual", "dinner", "apparel"],
+            description="Luxe fine-wale corduroy button-down shirt designed for casual styling and evening dinner occasions."
+        ),
+        ProductModel(
+            id="prod_shirt_cord_brn",
+            workspace_id=ws_acme.id,
+            title="Corduroy Shirt: Brown",
+            price=1499.00,
+            total_inventory=35,
+            in_stock=True,
+            category="Shirts",
+            tags=["shirt", "corduroy", "men", "brown", "casual", "apparel"],
+            description="Rich earth-tone fine-wale corduroy shirt for relaxed weekends and layering."
+        ),
+        ProductModel(
+            id="prod_shirt_cord_wine",
+            workspace_id=ws_acme.id,
+            title="Corduroy Shirt: Wine",
+            price=1499.00,
+            total_inventory=30,
+            in_stock=True,
+            category="Shirts",
+            tags=["shirt", "corduroy", "men", "wine", "red", "crimson", "dinner", "apparel"],
+            description="Sophisticated deep crimson wine corduroy shirt with tailored fit and mother-of-pearl buttons."
+        ),
+        ProductModel(
+            id="prod_shirt_cord_grn",
+            workspace_id=ws_acme.id,
+            title="Corduroy Shirt: Evergreen",
+            price=1499.00,
+            total_inventory=35,
+            in_stock=True,
+            category="Shirts",
+            tags=["shirt", "corduroy", "men", "green", "evergreen", "apparel"],
+            description="Forest evergreen corduroy overshirt crafted from soft breathable pure cotton."
+        ),
+        ProductModel(
+            id="prod_shirt_grn_cot",
+            workspace_id=ws_acme.id,
+            title="Green Cotton Shirt",
+            price=1299.00,
+            total_inventory=50,
+            in_stock=True,
+            category="Shirts",
+            tags=["shirt", "cotton", "men", "green", "casual", "office", "apparel"],
+            description="Breathable lightweight green cotton shirt suited for daily office and casual wear."
+        ),
+        # Ethnic & Women Collection
+        ProductModel(
+            id="prod_kurta_mandala",
+            workspace_id=ws_acme.id,
+            title="Mandala Elephant Embroidered Kurta",
+            price=1699.00,
+            total_inventory=45,
+            in_stock=True,
+            category="Kurtas",
+            tags=["kurta", "ethnic", "women", "festive", "wedding", "mandala", "embroidered", "apparel"],
+            description="Intricate royal mandala elephant embroidery on pure silk blend fabric for festive occasions."
+        ),
+        ProductModel(
+            id="prod_saree_yellow_floral",
+            workspace_id=ws_acme.id,
+            title="Yellow Floral Saree",
+            price=1699.00,
+            total_inventory=30,
+            in_stock=True,
+            category="Sarees",
+            tags=["saree", "ethnic", "women", "yellow floral", "yellow", "festive", "wedding", "apparel"],
+            description="Hand-block printed yellow floral pure georgette saree with scalloped golden border."
         )
     ]
     session.add_all(acme_prods)

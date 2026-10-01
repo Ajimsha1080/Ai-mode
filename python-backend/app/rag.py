@@ -5,7 +5,8 @@ import json
 import asyncio
 import urllib.request
 import urllib.error
-from typing import List, Dict, Any, Optional
+from abc import ABC, abstractmethod
+from typing import List, Dict, Any, Optional, Tuple
 from functools import lru_cache
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -13,12 +14,94 @@ from sqlalchemy.orm import selectinload
 from .db.database import async_session_factory
 from .db.models import KnowledgeSourceModel, KnowledgeDocModel, KnowledgeChunkModel
 
-def get_openai_embedding(text: str, api_key: str) -> Optional[List[float]]:
-    """Generates embedding using OpenAI text-embedding-3-small."""
-    try:
+# ============================================================================
+# 1. EMBEDDING PROVIDER INTERFACE & IMPLEMENTATIONS
+# ============================================================================
+
+class EmbeddingProvider(ABC):
+    """Abstract interface for dense embedding generation."""
+
+    @property
+    @abstractmethod
+    def dimension(self) -> int:
+        pass
+
+    @abstractmethod
+    def embed_text(self, text: str) -> List[float]:
+        """Synchronous embedding of a single string."""
+        pass
+
+    @abstractmethod
+    def embed_batch(self, texts: List[str]) -> List[List[float]]:
+        """Synchronous embedding of multiple strings."""
+        pass
+
+
+class LocalDeterministicEmbeddingProvider(EmbeddingProvider):
+    """
+    Deterministic n-gram & word hashing embedding generator.
+    Fast, zero-dependency, reproducible for offline unit/acceptance testing.
+    """
+    def __init__(self, dim: int = 128):
+        self._dim = dim
+
+    @property
+    def dimension(self) -> int:
+        return self._dim
+
+    @lru_cache(maxsize=8192)
+    def _compute_embedding(self, text: str) -> Tuple[float, ...]:
+        dim = self._dim
+        embedding = [0.0] * dim
+        clean = re.sub(r'[^a-z0-9\s]', ' ', text.lower())
+        words = [w for w in clean.split() if len(w) > 1]
+        if not words:
+            return tuple(embedding)
+
+        for i, word in enumerate(words):
+            h = 0
+            for char in word:
+                h = (h * 31 + ord(char)) & 0xffffffff
+            idx = abs(h) % dim
+            weight = 1.0 + (0.5 if len(word) > 5 else 0.0)
+            embedding[idx] += weight
+
+            if i < len(words) - 1:
+                next_word = words[i + 1]
+                bh = 0
+                for char in next_word:
+                    bh = (bh * 37 + ord(char)) & 0xffffffff
+                b_idx = abs(bh) % dim
+                embedding[b_idx] += 0.75
+
+        norm = math.sqrt(sum(x * x for x in embedding))
+        if norm > 0:
+            embedding = [x / norm for x in embedding]
+        return tuple(embedding)
+
+    def embed_text(self, text: str) -> List[float]:
+        return list(self._compute_embedding(text))
+
+    def embed_batch(self, texts: List[str]) -> List[List[float]]:
+        return [self.embed_text(t) for t in texts]
+
+
+class OpenAIEmbeddingProvider(EmbeddingProvider):
+    """OpenAI text-embedding-3-small provider."""
+
+    def __init__(self, api_key: str, model: str = "text-embedding-3-small", dim: int = 1536):
+        self.api_key = api_key
+        self.model = model
+        self._dim = dim
+
+    @property
+    def dimension(self) -> int:
+        return self._dim
+
+    def embed_text(self, text: str) -> List[float]:
         url = "https://api.openai.com/v1/embeddings"
         payload = {
-            "model": "text-embedding-3-small",
+            "model": self.model,
             "input": text[:8000]
         }
         req = urllib.request.Request(
@@ -26,55 +109,99 @@ def get_openai_embedding(text: str, api_key: str) -> Optional[List[float]]:
             data=json.dumps(payload).encode("utf-8"),
             headers={
                 "Content-Type": "application/json",
-                "Authorization": f"Bearer {api_key}"
+                "Authorization": f"Bearer {self.api_key}"
             },
             method="POST"
         )
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             return data["data"][0]["embedding"]
-    except Exception:
-        return None
 
-@lru_cache(maxsize=8192)
-def _cached_embedding_tuple(text: str, dim: int = 128) -> tuple:
-    embedding = [0.0] * dim
-    clean = re.sub(r'[^a-z0-9\s]', ' ', text.lower())
-    words = [w for w in clean.split() if len(w) > 1]
-    if not words:
-        return tuple(embedding)
+    def embed_batch(self, texts: List[str]) -> List[List[float]]:
+        url = "https://api.openai.com/v1/embeddings"
+        payload = {
+            "model": self.model,
+            "input": [t[:8000] for t in texts]
+        }
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.api_key}"
+            },
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return [item["embedding"] for item in data["data"]]
 
-    for i, word in enumerate(words):
-        h = 0
-        for char in word:
-            h = (h * 31 + ord(char)) & 0xffffffff
-        idx = abs(h) % dim
-        weight = 1.0 + (0.5 if len(word) > 5 else 0.0)
-        embedding[idx] += weight
 
-        if i < len(words) - 1:
-            next_word = words[i + 1]
-            bh = 0
-            for char in next_word:
-                bh = (bh * 37 + ord(char)) & 0xffffffff
-            b_idx = abs(bh) % dim
-            embedding[b_idx] += 0.75
+class OllamaEmbeddingProvider(EmbeddingProvider):
+    """Ollama local embedding provider (e.g. nomic-embed-text)."""
 
-    norm = math.sqrt(sum(x * x for x in embedding))
-    if norm > 0:
-        embedding = [x / norm for x in embedding]
-    return tuple(embedding)
+    def __init__(self, base_url: str = "http://localhost:11434", model: str = "nomic-embed-text", dim: int = 768):
+        self.base_url = base_url.rstrip("/")
+        self.model = model
+        self._dim = dim
+
+    @property
+    def dimension(self) -> int:
+        return self._dim
+
+    def embed_text(self, text: str) -> List[float]:
+        url = f"{self.base_url}/api/embeddings"
+        payload = {
+            "model": self.model,
+            "prompt": text[:8000]
+        }
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return data.get("embedding", [0.0] * self._dim)
+
+    def embed_batch(self, texts: List[str]) -> List[List[float]]:
+        return [self.embed_text(t) for t in texts]
+
+
+def get_embedding_provider() -> EmbeddingProvider:
+    """Factory to get the configured EmbeddingProvider."""
+    provider_name = os.getenv("EMBEDDING_PROVIDER", "").lower()
+    openai_key = os.getenv("OPENAI_API_KEY", "")
+
+    if provider_name == "openai" or (not provider_name and openai_key):
+        if openai_key:
+            return OpenAIEmbeddingProvider(api_key=openai_key)
+
+    if provider_name == "ollama":
+        ollama_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+        ollama_model = os.getenv("EMBEDDING_MODEL", "nomic-embed-text")
+        return OllamaEmbeddingProvider(base_url=ollama_url, model=ollama_model)
+
+    # Local deterministic fallback
+    dim = int(os.getenv("EMBEDDING_DIM", "128"))
+    return LocalDeterministicEmbeddingProvider(dim=dim)
+
+
+_active_provider = get_embedding_provider()
 
 def generate_embedding(text: str, dim: int = 128) -> List[float]:
-    openai_key = os.getenv("OPENAI_API_KEY")
-    if openai_key:
-        emb = get_openai_embedding(text, openai_key)
-        if emb:
-            return emb
-    return list(_cached_embedding_tuple(text, dim))
+    """Generates embedding using the active provider with automatic fallback."""
+    try:
+        provider = get_embedding_provider()
+        return provider.embed_text(text)
+    except Exception:
+        fallback = LocalDeterministicEmbeddingProvider(dim=dim)
+        return fallback.embed_text(text)
 
 def cosine_similarity(vec_a: List[float], vec_b: List[float]) -> float:
-    if len(vec_a) != len(vec_b) or not vec_a or not vec_b:
+    """Calculates cosine similarity between two float vectors."""
+    if not vec_a or not vec_b or len(vec_a) != len(vec_b):
         return 0.0
     dot = sum(a * b for a, b in zip(vec_a, vec_b))
     norm_a = math.sqrt(sum(a * a for a in vec_a))
@@ -82,8 +209,75 @@ def cosine_similarity(vec_a: List[float], vec_b: List[float]) -> float:
     denom = norm_a * norm_b
     return 0.0 if denom == 0 else dot / denom
 
+
 # ============================================================================
-# DYNAMIC DATABASE-BACKED KNOWLEDGE RETRIEVAL (STRICT TENANT ISOLATION)
+# 2. BM25 SPARSE RETRIEVAL ENGINE
+# ============================================================================
+
+class BM25Retriever:
+    """
+    Full BM25 (Best Matching 25) implementation with Okapi BM25 formula:
+    IDF(q_i) = ln((N - n(q_i) + 0.5) / (n(q_i) + 0.5) + 1.0)
+    score(D, Q) = sum(IDF(q_i) * (f(q_i, D) * (k1 + 1)) / (f(q_i, D) + k1 * (1 - b + b * (|D| / avgdl))))
+    """
+    def __init__(self, corpus: List[str], k1: float = 1.5, b: float = 0.75):
+        self.k1 = k1
+        self.b = b
+        self.corpus_size = len(corpus)
+        self.doc_lengths = []
+        self.doc_term_freqs = []
+        self.doc_freqs = {}
+        self.avg_doc_length = 0.0
+
+        total_length = 0
+        for doc in corpus:
+            tokens = self.tokenize(doc)
+            length = len(tokens)
+            self.doc_lengths.append(length)
+            total_length += length
+
+            tf = {}
+            for t in tokens:
+                tf[t] = tf.get(t, 0) + 1
+            self.doc_term_freqs.append(tf)
+
+            for t in tf.keys():
+                self.doc_freqs[t] = self.doc_freqs.get(t, 0) + 1
+
+        self.avg_doc_length = (total_length / self.corpus_size) if self.corpus_size > 0 else 1.0
+
+    @staticmethod
+    def tokenize(text: str) -> List[str]:
+        clean = re.sub(r'[^a-zA-Z0-9\s]', ' ', text.lower())
+        return [w for w in clean.split() if len(w) > 1]
+
+    def idf(self, term: str) -> float:
+        n = self.doc_freqs.get(term, 0)
+        return math.log(((self.corpus_size - n + 0.5) / (n + 0.5)) + 1.0)
+
+    def score(self, query: str) -> List[float]:
+        q_tokens = self.tokenize(query)
+        scores = [0.0] * self.corpus_size
+        if self.corpus_size == 0 or not q_tokens:
+            return scores
+
+        for q in q_tokens:
+            if q not in self.doc_freqs:
+                continue
+            idf_val = self.idf(q)
+            for doc_idx, tf_map in enumerate(self.doc_term_freqs):
+                f = tf_map.get(q, 0)
+                if f == 0:
+                    continue
+                doc_len = self.doc_lengths[doc_idx]
+                denom = f + self.k1 * (1.0 - self.b + self.b * (doc_len / self.avg_doc_length))
+                scores[doc_idx] += idf_val * (f * (self.k1 + 1.0)) / denom
+
+        return scores
+
+
+# ============================================================================
+# 3. DYNAMIC DATABASE-BACKED KNOWLEDGE RETRIEVAL (STRICT TENANT ISOLATION)
 # ============================================================================
 
 async def fetch_tenant_chunks_from_db(workspace_id: str) -> List[Dict[str, Any]]:
@@ -112,6 +306,7 @@ async def fetch_tenant_chunks_from_db(workspace_id: str) -> List[Dict[str, Any]]
             })
         return chunks
 
+
 def understand_query(question: str) -> Dict[str, Any]:
     q = question.lower()
     detected_intent = "GENERAL_FAQ"
@@ -119,12 +314,12 @@ def understand_query(question: str) -> Dict[str, Any]:
 
     if re.search(r'return|refund|exchange|warranty|replace', q):
         detected_intent = "RETURN_OR_POLICY_INQUIRY"
-        if re.search(r'jacket|tee|jogger|hoodie|apparel|techwear', q):
+        if re.search(r'jacket|tee|jogger|hoodie|apparel|techwear|shirt|kurta|saree', q):
             entities["product_category"] = "apparel"
         days_match = re.search(r'(\d+)\s*days?', q)
         if days_match:
             entities["timeframe_days"] = int(days_match.group(1))
-    elif re.search(r'ship|transit|delivery|arrive|bluedart|delhivery|dtdc', q):
+    elif re.search(r'ship|transit|delivery|arrive|bluedart|delhivery|dtdc|fedex|tracking', q):
         detected_intent = "SHIPPING_LOGISTICS"
     elif re.search(r'size|fit|chart|measurement', q):
         detected_intent = "SIZING_FIT"
@@ -135,6 +330,7 @@ def understand_query(question: str) -> Dict[str, Any]:
         "confidence": 0.95
     }
 
+
 def rewrite_query(question: str, understanding: Dict[str, Any]) -> Dict[str, Any]:
     intent = understanding["detected_intent"]
     expansion_terms = []
@@ -143,11 +339,11 @@ def rewrite_query(question: str, understanding: Dict[str, Any]) -> Dict[str, Any
         if "international" in question.lower():
             expansion_terms = ["international return labels", "customs shipping"]
         else:
-            expansion_terms = ["store return policy", "warranty terms", "refund conditions"]
+            expansion_terms = ["store return policy", "warranty terms", "refund conditions", "exchange window"]
     elif intent == "SHIPPING_LOGISTICS":
-        expansion_terms = ["standard transit times", "express delivery", "customs"]
+        expansion_terms = ["standard transit times", "express delivery", "bluedart", "courier tracking"]
     elif intent == "SIZING_FIT":
-        expansion_terms = ["footwear sizing chart", "fit recommendation"]
+        expansion_terms = ["sizing chart", "fit recommendation", "measurements"]
 
     rewritten = f"{question} {' '.join(expansion_terms)}".strip()
     return {
@@ -156,8 +352,9 @@ def rewrite_query(question: str, understanding: Dict[str, Any]) -> Dict[str, Any
         "expansion_terms": expansion_terms
     }
 
+
 def hybrid_retrieve(query: str, workspace_id: str, tenant_chunks: List[Dict[str, Any]], top_k: int = 5):
-    """Hybrid dense vector and sparse token retrieval strictly scoped to tenant_chunks."""
+    """Hybrid dense vector and BM25 sparse token retrieval strictly scoped to tenant_chunks."""
     if not workspace_id:
         raise ValueError("workspace_id is mandatory and cannot be empty for hybrid_retrieve")
 
@@ -165,24 +362,28 @@ def hybrid_retrieve(query: str, workspace_id: str, tenant_chunks: List[Dict[str,
         return [], []
 
     dense_vec = generate_embedding(query)
-    sparse_tokens = [w for w in re.sub(r'[^a-z0-9\s]', ' ', query.lower()).split() if len(w) > 2]
 
-    # Dense scoring
+    # 1. Dense scoring
     dense_hits = []
     for c in tenant_chunks:
-        score = cosine_similarity(dense_vec, c["embedding"])
+        c_emb = c["embedding"] if isinstance(c["embedding"], list) else generate_embedding(c["content"])
+        score = cosine_similarity(dense_vec, c_emb)
         dense_hits.append({"chunk_id": c["chunk_id"], "score": score, "chunk": c})
     dense_hits.sort(key=lambda x: x["score"], reverse=True)
 
-    # Sparse scoring
+    # 2. BM25 Sparse scoring
+    corpus_texts = [c["content"] for c in tenant_chunks]
+    bm25 = BM25Retriever(corpus_texts)
+    bm25_scores = bm25.score(query)
+
     sparse_hits = []
-    for c in tenant_chunks:
-        c_words = c["content"].lower().split()
-        score = sum(1.0 for t in sparse_tokens if any(t in w for w in c_words))
-        sparse_hits.append({"chunk_id": c["chunk_id"], "score": score, "chunk": c})
+    for idx, c in enumerate(tenant_chunks):
+        s_score = bm25_scores[idx]
+        sparse_hits.append({"chunk_id": c["chunk_id"], "score": s_score, "chunk": c})
     sparse_hits.sort(key=lambda x: x["score"], reverse=True)
 
     return dense_hits[:top_k], sparse_hits[:top_k]
+
 
 def reciprocal_rank_fusion(dense_hits, sparse_hits, k=60):
     rrf_map = {}
@@ -215,6 +416,7 @@ def reciprocal_rank_fusion(dense_hits, sparse_hits, k=60):
     fused.sort(key=lambda x: x["rrf_score"], reverse=True)
     return fused
 
+
 def rerank_candidates(fused_candidates, query: str, understanding: Dict[str, Any]):
     query_words = [w for w in query.lower().split() if len(w) > 2]
     reranked = []
@@ -229,7 +431,7 @@ def rerank_candidates(fused_candidates, query: str, understanding: Dict[str, Any
         if hits > 0:
             score += (hits / len(query_words)) * 0.5 + (hits * 0.2)
 
-        if understanding["detected_intent"] == "RETURN_OR_POLICY_INQUIRY" and any(k in lower for k in ["return", "refund", "warranty", "international"]):
+        if understanding["detected_intent"] == "RETURN_OR_POLICY_INQUIRY" and any(k in lower for k in ["return", "refund", "warranty", "exchange", "doorstep"]):
             score += 0.25
 
         reranked.append({
@@ -240,6 +442,7 @@ def rerank_candidates(fused_candidates, query: str, understanding: Dict[str, Any
 
     reranked.sort(key=lambda x: x["score"], reverse=True)
     return reranked
+
 
 def assemble_context(reranked_chunks, top_k=3):
     selected = reranked_chunks[:top_k]
@@ -261,11 +464,11 @@ def assemble_context(reranked_chunks, top_k=3):
         "chunks_included": len(selected)
     }
 
+
 def verify_grounding(natural_answer: str, context: str, has_retrieved_chunks: bool) -> Dict[str, Any]:
     """
     Real Entailment / Citation Grounding Check:
     Requires factual statements to be supported by retrieved chunks.
-    If no chunks were retrieved, only verified if it explicitly acknowledges lack of data.
     """
     if not has_retrieved_chunks:
         is_safe_unanswered = any(phrase in natural_answer.lower() for phrase in [
@@ -300,6 +503,7 @@ def verify_grounding(natural_answer: str, context: str, has_retrieved_chunks: bo
         "verified_facts_count": verified
     }
 
+
 def execute_rag_pipeline(question: str, workspace_id: str, tenant_chunks: Optional[List[Dict[str, Any]]] = None, top_k: int = 3) -> Dict[str, Any]:
     if not workspace_id:
         raise ValueError("workspace_id is mandatory and cannot be empty for RAG execution")
@@ -318,23 +522,23 @@ def execute_rag_pipeline(question: str, workspace_id: str, tenant_chunks: Option
                     tenant_chunks = pool.submit(asyncio.run, fetch_tenant_chunks_from_db(workspace_id)).result()
             else:
                 tenant_chunks = asyncio.run(fetch_tenant_chunks_from_db(workspace_id))
-        except Exception as e:
+        except Exception:
             tenant_chunks = []
 
     # 1. Understanding
     understanding = understand_query(question)
     # 2. Rewrite
     rewrite = rewrite_query(question, understanding)
-    # 3. Multi-Tenant Hybrid Retrieval
+    # 3. Multi-Tenant Hybrid Retrieval (Dense + BM25)
     dense_hits, sparse_hits = hybrid_retrieve(rewrite["rewritten_query"], workspace_id=workspace_id, tenant_chunks=tenant_chunks, top_k=top_k)
-    # 4. RRF
+    # 4. Reciprocal Rank Fusion
     fused = reciprocal_rank_fusion(dense_hits, sparse_hits, k=60)
     # 5. Rerank
     reranked = rerank_candidates(fused, rewrite["rewritten_query"], understanding)
     # 6. Context Assembly with Prompt-Injection Delimiters
     context = assemble_context(reranked, top_k=top_k)
 
-    # 7. Answer Synthesis - Grounded Strictly in Tenant Knowledge (Never Invent Policies!)
+    # 7. Answer Synthesis Grounded in Tenant Knowledge
     if reranked and len(tenant_chunks) > 0:
         natural_answer = reranked[0]['chunk_text']
         has_chunks = True
