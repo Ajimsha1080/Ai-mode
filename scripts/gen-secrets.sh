@@ -18,6 +18,7 @@ gen_secret() {
 }
 
 POSTGRES_PW=$(gen_secret)
+POSTGRES_APP_PW=$(gen_secret)
 REDIS_PW=$(gen_secret)
 SESSION_SECRET=$(gen_secret)
 ENCRYPTION_SECRET=$(gen_secret)
@@ -50,6 +51,7 @@ rm -rf "$TMP_DIR"
 echo ""
 echo "# Generated on $(date -u)"
 echo "POSTGRES_PASSWORD=\"${POSTGRES_PW}\""
+echo "POSTGRES_APP_PASSWORD=\"${POSTGRES_APP_PW}\""
 echo "REDIS_PASSWORD=\"${REDIS_PW}\""
 echo "SESSION_JWT_SECRET=\"${SESSION_SECRET}\""
 echo "SERVICE_JWT_PRIVATE_KEY=\"${PRIVATE_KEY_B64}\""

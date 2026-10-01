@@ -92,15 +92,16 @@ TENANT_TABLES = [
 async def set_tenant_context(session: AsyncSession, workspace_id: Optional[str] = None, is_super_admin: bool = False):
     """Sets PostgreSQL transaction-local configuration for Row-Level Security."""
     if "postgresql" in DATABASE_URL:
-        if workspace_id:
-            await session.execute(
-                text("SELECT set_config('app.current_tenant_id', :tid, true)"),
-                {"tid": str(workspace_id)}
-            )
-        if is_super_admin:
-            await session.execute(
-                text("SELECT set_config('app.is_super_admin', 'true', true)")
-            )
+        # Transaction-scoped (is_local=true). Clears automatically on commit or rollback.
+        tid_val = str(workspace_id) if workspace_id else ""
+        await session.execute(
+            text("SELECT set_config('app.current_tenant_id', :tid, true)"),
+            {"tid": tid_val}
+        )
+        await session.execute(
+            text("SELECT set_config('app.is_super_admin', :isa, true)"),
+            {"isa": "true" if is_super_admin else "false"}
+        )
 
 @asynccontextmanager
 async def tenant_session(workspace_id: Optional[str] = None, is_super_admin: bool = False) -> AsyncGenerator[AsyncSession, None]:
@@ -118,7 +119,7 @@ async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
         yield session
 
 async def apply_postgres_rls_and_vector_indices(conn):
-    """Enables pgvector extension, Postgres RLS policies, and HNSW indexes."""
+    """Enables pgvector extension, non-superuser app_user permissions, hardened fail-closed RLS policies, and HNSW indexes."""
     if "postgresql" in DATABASE_URL:
         # 1. Enable pgvector extension
         try:
@@ -126,7 +127,27 @@ async def apply_postgres_rls_and_vector_indices(conn):
         except Exception:
             pass
 
-        # 2. Enable Row-Level Security on all tenant-owned tables
+        # 2. Create app_user non-superuser role and grant privileges
+        try:
+            await conn.execute(text("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'app_user') THEN
+                        CREATE ROLE app_user WITH LOGIN PASSWORD 'app_user_secure_production_password_32char!'
+                        NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+                    ELSE
+                        ALTER ROLE app_user WITH NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+                    END IF;
+                END
+                $$;
+            """))
+            await conn.execute(text("GRANT USAGE ON SCHEMA public TO app_user;"))
+            await conn.execute(text("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_user;"))
+            await conn.execute(text("GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO app_user;"))
+        except Exception:
+            pass
+
+        # 3. Enable Strict Fail-Closed FORCE Row-Level Security on all tenant-owned tables
         for tbl in TENANT_TABLES:
             try:
                 await conn.execute(text(f"ALTER TABLE {tbl} ENABLE ROW LEVEL SECURITY;"))
@@ -134,16 +155,29 @@ async def apply_postgres_rls_and_vector_indices(conn):
                 await conn.execute(text(f"DROP POLICY IF EXISTS tenant_isolation_policy ON {tbl};"))
                 await conn.execute(text(f"""
                     CREATE POLICY tenant_isolation_policy ON {tbl}
+                    FOR ALL
+                    TO PUBLIC
                     USING (
-                        workspace_id = current_setting('app.current_tenant_id', true)
-                        OR current_setting('app.is_super_admin', true) = 'true'
-                        OR current_setting('app.current_tenant_id', true) = ''
+                        (current_setting('app.is_super_admin', true) = 'true')
+                        OR (
+                            workspace_id IS NOT NULL 
+                            AND workspace_id <> '' 
+                            AND workspace_id = NULLIF(current_setting('app.current_tenant_id', true), '')
+                        )
+                    )
+                    WITH CHECK (
+                        (current_setting('app.is_super_admin', true) = 'true')
+                        OR (
+                            workspace_id IS NOT NULL 
+                            AND workspace_id <> '' 
+                            AND workspace_id = NULLIF(current_setting('app.current_tenant_id', true), '')
+                        )
                     );
                 """))
             except Exception:
                 pass
 
-        # 3. Create HNSW Vector Index for fast approximate cosine similarity
+        # 4. Create HNSW Vector Index for fast approximate cosine similarity
         try:
             await conn.execute(text("""
                 CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_embedding_hnsw 
