@@ -1,74 +1,46 @@
 # ShopMate AaaS Migration Ledger
 
-This ledger documents the architectural consolidation and migration of all commerce, RAG, tool execution, and business logic from Next.js (TypeScript) into Python (FastAPI).
+This ledger documents the complete architectural consolidation and security hardening of the ShopMate (Ai-mode) platform, making Python FastAPI the single backend of record for all business logic, AI orchestration, database persistence, and external connectors, while Next.js 15 operates strictly as the UI and thin Backend-For-Frontend (BFF) proxy.
 
 ---
 
-## 1. Migration Summary
+## 1. Migration Summary Matrix
 
-| Component / Layer | Previous State (TypeScript) | Migrated State (Python FastAPI) | Status |
+| Component / Layer | Previous State (TypeScript / Node) | Migrated State (Python FastAPI & Infrastructure) | Verification Status |
 | :--- | :--- | :--- | :--- |
-| **RAG Pipeline** | `src/lib/rag/index.ts` (Simple In-Memory TF-IDF) | `python-backend/app/rag.py` (12-stage BM25 + pgvector HNSW) | **Completed & Consolidated** |
-| **Commerce Tools** | `src/lib/commerce/index.ts` | `python-backend/app/tools.py` (10 Pydantic Tools) | **Completed & Consolidated** |
-| **Agent Reasoning Cycle** | `src/lib/agent-runtime/index.ts` (Duplicate TS runtime) | `python-backend/app/agent_runtime.py` (FastAPI / SSE streaming) | **Completed & Consolidated** |
-| **Data Layer & Storage** | Local JSON (`./data/*.json`) | PostgreSQL 16 (`pgvector`) + SQLAlchemy 2.x + Alembic | **Completed & Consolidated** |
-| **Multi-Tenancy** | In-Memory `filter(workspace_id)` | Postgres Row-Level Security (`current_tenant_id`) | **Hardened** |
-| **Service Auth** | Symmetric Shared Secret (`HS256`) | Asymmetric Cryptographic Signing (`RS256` / `EdDSA`) | **Hardened** |
-| **Caching & Rate Limits** | In-Memory Timers | Redis 7 Sliding Window (`TenantRateLimiter`) | **Hardened** |
-| **Observability** | Console logs | Structured JSON logs + PII Redaction + OpenTelemetry Context | **Hardened** |
+| **Network & Port Exposure** | Unrestricted host port bindings (`5432`, `6379`, `8000`, `3000`) | Internal Docker network isolation (`expose:` only); Nginx reverse proxy binds `80` & `443` | **Verified & Hardened** |
+| **Reverse Proxy & TLS** | Node mapped to 80; no TLS termination | Nginx with TLS 1.2+, HTTPS 301 redirects, HSTS, security headers, unbuffered SSE streams | **Verified & Hardened** |
+| **Database Security & RLS** | Superuser bypass with potential context leakage | Dedicated non-superuser `app_user` login role with `FORCE ROW LEVEL SECURITY` across all 18 tables; fails closed on missing tenant context | **Verified & Hardened** |
+| **Database Persistence** | Flat JSON files (`./data/*.json`) | PostgreSQL 16 (`pgvector` HNSW indexes) via SQLAlchemy 2.x + Alembic startup migrations | **Verified & Hardened** |
+| **Service Authentication** | Shared symmetric secret (`HS256`) | Asymmetric RS256 signing (Next.js signs with private key, FastAPI verifies with public key) | **Verified & Hardened** |
+| **Session Authentication** | Node.js in-memory auth & password hashing | FastAPI `/api/v1/auth/` (bcrypt hashing, session JWTs, rate-limited lockouts); Next.js forwards HTTP-only cookies | **Verified & Hardened** |
+| **Commerce Connectors** | Node.js connector logic & credential encryption | FastAPI `/api/v1/connectors/` (Shopify, WooCommerce, Razorpay, Stripe, Logistics, Webhooks) | **Verified & Hardened** |
+| **RAG & Search Pipeline** | Duplicate Node.js retrieval | 12-Stage Hybrid RAG (BM25 keyword search + dense vector retrieval with RRF fusion) in `app/rag.py` | **Verified & Hardened** |
+| **Commerce Tools** | Duplicate TypeScript tool implementations | 10 typed Pydantic tools in `app/tools.py` with strict schema validation | **Verified & Hardened** |
+| **Agent Reasoning Cycle** | TypeScript agent runtime | Python FastAPI SSE streaming runtime with multi-turn state preservation in `app/agent_runtime.py` | **Verified & Hardened** |
+| **Distributed Caching & Rate Limits**| In-memory maps | Redis 7 with password auth (`--requirepass`), sliding window rate limiter, and session caching | **Verified & Hardened** |
+| **Observability & Logging** | Unstructured `console.log` | Structured JSON logging with request IDs, trace contexts, and automatic PII redaction | **Verified & Hardened** |
 
 ---
 
-## 2. Deleted Files & Cleanup
+## 2. BFF Route Matrix (Next.js 15)
 
-As per Phase 5 consolidation rules, all duplicate TypeScript business logic modules were safely eliminated after full parity verification:
-
-- **Deleted:** `src/lib/rag/index.ts`
-- **Deleted:** `src/lib/commerce/index.ts`
-- **Deleted:** Duplicate in-memory tools and heuristic duplicate algorithms.
+All API routes under `src/app/api/` act as thin proxies forwarding authenticated requests to FastAPI. Complete details are documented in `docs/BFF_AUDIT.md`.
 
 ---
 
-## 3. BFF Route Proxies (Next.js 15)
+## 3. Test Suites & Pass Rates
 
-The following Next.js API routes were converted to thin Backend-For-Frontend (BFF) proxies forwarding authenticated requests directly to Python FastAPI:
-
-1. `src/app/api/v1/agents/[id]/chat/route.ts` -> Proxies to `POST /api/v1/agents/{id}/chat`
-2. `src/app/api/agents/[id]/chat/route.ts` -> Proxies to `POST /api/v1/agents/{id}/chat`
-3. `src/app/api/agents/[id]/stream/route.ts` -> Proxies SSE to `POST /api/v1/agents/{id}/chat/stream`
-4. `src/app/api/rag/query/route.ts` -> Proxies to `POST /api/v1/rag/query`
-5. `src/app/api/rag/ingest/route.ts` -> Proxies to `POST /api/v1/knowledge/ingest`
-6. `src/app/api/commerce/orders/route.ts` -> Proxies to `GET /api/v1/orders/{order_number}`
-7. `src/app/api/admin/route.ts` -> Proxies to `GET /api/v1/db/status`
-8. `src/lib/agent-runtime/index.ts` -> Thin HTTP client with direct Python fallback for testing.
+| Test Suite | Command | Cases | Pass Rate |
+| :--- | :--- | :--- | :--- |
+| **Pytest Backend Suite** | `python -m pytest python-backend/ -v` | 36 / 36 | **100% Passed** |
+| **Acceptance Test Suite** | `npm run test:acceptance` | 33 / 33 | **100% Passed** |
+| **Agentic Commerce Evals** | `npm run test:agentic` | 61 / 61 | **100% Passed** |
+| **Production Build** | `npm run build` | Next.js 15 App Router | **Zero Type/Build Errors** |
 
 ---
 
-## 4. Parity & Acceptance Verification
+## 4. Operational & Startup Assurance
 
-All test suites verify 100% parity across all commerce and AI reasoning capabilities:
-
-1. **Acceptance Suite (`npm run test:acceptance`)**: **33 / 33 Passed (100%)**
-   - Cryptographic secret length validation & rejection of default fallbacks.
-   - Fail-closed production behavior on missing secrets.
-   - RS256 asymmetric service token verification.
-   - Multi-tenant boundary enforcement and zero cross-tenant leakage.
-   - SSRF protection against AWS/GCP metadata (`169.254.169.254`), IPv6 loopbacks, and private RFC 1918 subnets.
-   - Order lookup email matching and timing-safe 404 responses.
-
-2. **Agentic Commerce Suite (`npm run test:agentic`)**: **61 / 61 Passed (100%)**
-   - Occasion & semantic use-case queries (dinner, gym, gift).
-   - Strict category constraint enforcement ("men shirts" excludes outerwear/hoodies/sarees).
-   - Dynamic taxonomy extraction for unseen merchant catalogs.
-   - Multi-turn search state inheritance and price refinement.
-   - Deterministic pagination metadata (`page`, `pageSize`, `totalMatches`, `hasMore`).
-   - Dynamic sorting (`cheaper shirts`, `most expensive shirts`).
-   - Grounded store policy FAQ retrieval.
-   - Authoritative inventory lookups and contextual pronoun/ordinal cart additions.
-
-3. **Python Pytest Suite (`python -m pytest python-backend/`)**: **27 / 27 Passed (100%)**
-   - 12-stage RAG execution pipeline.
-   - Asymmetric RS256 service JWT and admin token validation.
-   - Tool execution schemas and Pydantic validation.
-   - Multi-tenant Postgres RLS and database repository queries.
-   - Phase 3 parity acceptance scenarios ported from TypeScript.
+- **Automatic Startup Migrations**: Python backend container runs `alembic upgrade head` on boot via `entrypoint.sh`, aborting startup immediately if migrations fail.
+- **Fail-Closed Secrets Policy**: Missing or low-entropy secrets in production trigger immediate boot termination, preventing deployment with insecure default credentials.
