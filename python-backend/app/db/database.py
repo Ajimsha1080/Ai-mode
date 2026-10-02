@@ -88,7 +88,14 @@ TENANT_TABLES = [
     "deployments",
     "api_keys",
     "integrations",
-    "audit_logs"
+    "audit_logs",
+    "ai_mode_configs",
+    "ai_mode_knowledge_sources",
+    "ai_mode_knowledge_docs",
+    "ai_mode_knowledge_chunks",
+    "ai_mode_conversations",
+    "ai_mode_messages",
+    "ai_mode_deployments"
 ]
 
 async def set_tenant_context(session: AsyncSession, workspace_id: str | None = None, is_super_admin: bool = False):

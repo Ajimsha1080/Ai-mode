@@ -13,6 +13,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .agent_runtime import run_agent_cycle
+from .ai_mode.routes import router as ai_mode_router
 from .audit import get_tenant_audit_logs, record_audit_log
 from .auth import require_admin_auth, resolve_agent_chat_auth, verify_service_jwt
 from .auth_routes import router as auth_router
@@ -58,6 +59,7 @@ app = FastAPI(
 app.add_middleware(ObservabilityMiddleware)
 app.include_router(auth_router)
 app.include_router(connectors_router)
+app.include_router(ai_mode_router)
 
 # Restrict CORS to explicit allowed origins list (Never wildcard with credentials)
 raw_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000,http://frontend:3000")

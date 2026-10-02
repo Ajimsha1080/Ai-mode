@@ -6,7 +6,7 @@ import { usePathname } from 'next/navigation';
 import { 
   LayoutGrid, Bot, Package, BookOpen, Layers, 
   Wrench, MessageSquare, Search, BarChart3, 
-  Globe, ShieldCheck, Users, CreditCard, Settings, UserPlus
+  Globe, ShieldCheck, Users, CreditCard, Settings, UserPlus, Sparkles
 } from 'lucide-react';
 import { fetchWithCache } from '@/lib/client-cache';
 
@@ -23,6 +23,7 @@ export default function Sidebar() {
       fetchWithCache('/api/deployments');
       fetchWithCache('/api/agents');
       fetchWithCache('/api/settings');
+      fetchWithCache('/api/ai-mode/config');
     };
 
     if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
@@ -38,6 +39,13 @@ export default function Sidebar() {
       href: '/dashboard', 
       icon: LayoutGrid,
       isActive: (path: string) => path === '/dashboard' || path === '/'
+    },
+    { 
+      name: 'AI Mode', 
+      href: '/ai-mode', 
+      icon: Sparkles,
+      isNew: true,
+      isActive: (path: string) => path.startsWith('/ai-mode')
     },
     { 
       name: 'AI Agent', 
@@ -146,6 +154,11 @@ export default function Sidebar() {
                   }`} 
                 />
                 <span className="hidden lg:inline tracking-tight truncate">{item.name}</span>
+                {item.isNew && (
+                  <span className="hidden lg:inline ml-auto text-[9px] font-extrabold px-1.5 py-0.5 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200/60">
+                    NEW
+                  </span>
+                )}
               </Link>
             );
           })}

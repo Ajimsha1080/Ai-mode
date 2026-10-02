@@ -42,7 +42,7 @@ def redact_pii(data: Any) -> Any:
         for k, v in data.items():
             k_lower = str(k).lower()
             if any(secret_term in k_lower for secret_term in ["password", "secret", "token", "key", "authorization", "cookie"]):
-                redacted[k] = "[REDACTED_SECRET]"
+                redacted[k] = "[REDACTED_VALUE]"
             else:
                 redacted[k] = redact_pii(v)
         return redacted

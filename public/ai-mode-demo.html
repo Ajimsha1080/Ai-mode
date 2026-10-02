@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Mode Storefront Demonstration</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Inter', sans-serif; background: #09090b; color: #f4f4f5; line-height: 1.5; padding-bottom: 80px; }
+    header { background: #18181b; border-bottom: 1px solid #27272a; padding: 20px 40px; display: flex; justify-content: space-between; align-items: center; }
+    .brand { font-size: 20px; font-weight: 800; color: #ffffff; display: flex; items-center; gap: 8px; }
+    .hero { max-width: 1200px; margin: 60px auto; padding: 0 20px; text-align: center; }
+    .hero h1 { font-size: 42px; font-weight: 900; background: linear-gradient(to right, #818cf8, #c084fc); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .hero p { color: #a1a1aa; font-size: 16px; margin-top: 12px; max-width: 600px; margin-left: auto; margin-right: auto; }
+    .grid { max-width: 1200px; margin: 40px auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 24px; padding: 0 20px; }
+    .card { background: #18181b; border: 1px solid #27272a; border-radius: 16px; overflow: hidden; padding: 16px; }
+    .card img { width: 100%; height: 200px; object-fit: cover; border-radius: 12px; }
+    .card h3 { font-size: 14px; font-weight: 700; margin-top: 12px; }
+    .card .price { font-size: 16px; font-weight: 800; color: #818cf8; margin-top: 4px; }
+    .badge { display: inline-block; padding: 4px 10px; background: rgba(99, 102, 241, 0.15); color: #818cf8; border-radius: 9999px; font-size: 11px; font-weight: 700; margin-bottom: 12px; border: 1px solid rgba(99, 102, 241, 0.3); }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="brand">
+      <span>✨</span> Blue Tyga Athleisure
+    </div>
+    <div style="font-size: 13px; color: #a1a1aa;">
+      Demonstrating AI Mode Website Widget
+    </div>
+  </header>
+
+  <main>
+    <div class="hero">
+      <span class="badge">AI MODE POWERED STORE</span>
+      <h1>Autonomous Conversational Shopping</h1>
+      <p>Click the floating AI Mode button on the bottom right to search, compare products, check inventory, and add items to cart.</p>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <img src="https://images.unsplash.com/photo-1523381210434-271e8be1f52b?w=400" alt="UPF 50+ Sunscreen Jacket">
+        <h3>UPF 50+ Sunscreen Jacket</h3>
+        <div class="price">₹1,899</div>
+      </div>
+      <div class="card">
+        <img src="https://images.unsplash.com/photo-1552902865-b72c031ac5ea?w=400" alt="Active Travel Joggers">
+        <h3>Active Travel Joggers</h3>
+        <div class="price">₹1,499</div>
+      </div>
+      <div class="card">
+        <img src="https://images.unsplash.com/photo-1576566588028-4147f3842f27?w=400" alt="Pro Dri-FIT Running Tee">
+        <h3>Pro Dri-FIT Running Tee</h3>
+        <div class="price">₹899</div>
+      </div>
+      <div class="card">
+        <img src="https://images.unsplash.com/photo-1556905055-8f358a7a47b2?w=400" alt="Thermal Windbreaker Hoodie">
+        <h3>Thermal Windbreaker Hoodie</h3>
+        <div class="price">₹2,499</div>
+      </div>
+    </div>
+  </main>
+
+  <!-- AI Mode Standalone Widget Integration -->
+  <script
+    src="/ai-mode-widget.js"
+    data-ai-mode-widget-id="aim_pub_demo"
+    data-primary-color="#6366f1"
+    data-position="bottom_right"
+    data-launcher-text="Ask AI Mode"
+    async>
+  </script>
+
+</body>
+</html>

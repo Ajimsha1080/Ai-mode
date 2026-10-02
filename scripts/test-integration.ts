@@ -7,12 +7,12 @@ process.env.INTERNAL_SERVICE_SECRET = process.env.SERVICE_JWT_SECRET;
 
 import { seedDatabaseIfEmpty } from '../src/lib/db/seed';
 import { db, getDatabase } from '../src/lib/db';
-import { hashPassword, verifyPassword, createSessionToken, verifySessionToken } from '../src/lib/auth';
-import { generateEmbedding, cosineSimilarity, searchKnowledge } from '../src/lib/rag';
-import { commerceEngine } from '../src/lib/commerce';
+import { hashPassword, verifyPassword, createSessionToken, verifySessionToken, createServiceJwt } from '../src/lib/auth';
 import { executeTool } from '../src/lib/tools';
 import { runAgentCycle } from '../src/lib/agent-runtime';
 import { runAgentEvaluations } from '../src/lib/evaluations';
+
+const PYTHON_BACKEND_URL = process.env.PYTHON_BACKEND_URL || 'http://127.0.0.1:8000';
 
 async function runAllTests() {
   console.log('========================================================');
@@ -70,29 +70,44 @@ async function runAllTests() {
   });
 
   // 3. RAG Semantic Embedding & Vector Search
-  await test('3. 128-dim RAG Semantic Chunking & Cosine Retrieval', async () => {
-    const vec1 = generateEmbedding('return and exchange policy within 7 days');
-    const vec2 = generateEmbedding('how do I exchange an item for refund');
-    const vec3 = generateEmbedding('electronics high definition sound amplifier');
-    
-    assert.strictEqual(vec1.length, 128, 'Vector dimension must be 128');
-    
-    const simHigh = cosineSimilarity(vec1, vec2);
-    const simLow = cosineSimilarity(vec1, vec3);
-    
-    assert(simHigh > simLow, 'Similar semantic queries must score higher cosine similarity');
+  await test('3. Advanced RAG Semantic Retrieval', async () => {
+    const serviceToken = await createServiceJwt('ws_acme_corp', 'usr_admin', 'ADMIN');
+    const res = await fetch(`${PYTHON_BACKEND_URL}/api/v1/rag/query`, {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${serviceToken}`
+      },
+      body: JSON.stringify({ question: 'What is the return policy for unworn items?', workspace_id: 'ws_acme_corp' })
+    });
+    assert(res.ok, 'RAG query endpoint should respond with 200 OK');
+    const data = await res.json();
+    assert(data.answer || data.citations, 'Must return grounded RAG result');
   });
 
   // 4. Commerce Engine & Tool Dispatcher
   await test('4. Commerce Engine & Tool Execution Engine', async () => {
     // Product search with budget constraint
-    const prods = await commerceEngine.searchProducts('ws_acme_corp', { query: 'jacket', maxPrice: 2000 });
-    assert(prods.length > 0, 'Must find Sunscreen Jackets under ₹2000');
-    assert(prods.every(p => p.price <= 2000), 'All products must satisfy maxPrice <= 2000');
+    const searchRes = await executeTool({
+      tool_id: 'product_search',
+      parameters: { query: 'jacket', max_price: 2000 },
+      workspace_id: 'ws_acme_corp',
+      agent_id: 'agent_shopmate_01',
+      conversation_id: 'conv_test_1'
+    });
+    assert.strictEqual(searchRes.status, 'SUCCESS');
+    assert(searchRes.data.length > 0, 'Must find Sunscreen Jackets under ₹2000');
+    assert(searchRes.data.every((p: any) => p.price <= 2000), 'All products must satisfy maxPrice <= 2000');
 
     // Searching non-existent items must return empty
-    const noShoes = await commerceEngine.searchProducts('ws_acme_corp', { query: 'shoes' });
-    assert.strictEqual(noShoes.length, 0, 'Must not return jackets for shoes query');
+    const noShoesRes = await executeTool({
+      tool_id: 'product_search',
+      parameters: { query: 'shoes' },
+      workspace_id: 'ws_acme_corp',
+      agent_id: 'agent_shopmate_01',
+      conversation_id: 'conv_test_1'
+    });
+    assert.strictEqual(noShoesRes.data.length, 0, 'Must not return jackets for shoes query');
 
     // Order lookup
     const orderRes = await executeTool({

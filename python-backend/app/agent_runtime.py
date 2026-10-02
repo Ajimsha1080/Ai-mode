@@ -3,7 +3,7 @@ import re
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from .llm import SYSTEM_INJECTION_DEFENSE_PROMPT, LLMClient
 from .rag import execute_rag_pipeline
@@ -18,12 +18,12 @@ def _load_cache() -> dict[str, Any]:
     try:
         if _CACHE_FILE.exists():
             with open(_CACHE_FILE, encoding="utf-8") as f:
-                return json.load(f)
+                return cast(dict[str, Any], json.load(f))
     except Exception:
         pass
     return {"search_state": {}, "last_products": {}}
 
-def _save_cache(data: dict[str, Any]):
+def _save_cache(data: dict[str, Any]) -> None:
     try:
         _CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
         with open(_CACHE_FILE, "w", encoding="utf-8") as f:
@@ -33,9 +33,10 @@ def _save_cache(data: dict[str, Any]):
 
 def get_conv_search_state(conv_id: str) -> dict[str, Any] | None:
     cache = _load_cache()
-    return cache.get("search_state", {}).get(conv_id)
+    val = cache.get("search_state", {}).get(conv_id)
+    return cast(dict[str, Any] | None, val)
 
-def set_conv_search_state(conv_id: str, state: dict[str, Any]):
+def set_conv_search_state(conv_id: str, state: dict[str, Any]) -> None:
     cache = _load_cache()
     if "search_state" not in cache:
         cache["search_state"] = {}
@@ -44,9 +45,10 @@ def set_conv_search_state(conv_id: str, state: dict[str, Any]):
 
 def get_conv_last_products(conv_id: str) -> list[dict[str, Any]]:
     cache = _load_cache()
-    return cache.get("last_products", {}).get(conv_id, [])
+    val = cache.get("last_products", {}).get(conv_id, [])
+    return cast(list[dict[str, Any]], val)
 
-def set_conv_last_products(conv_id: str, prods: list[dict[str, Any]]):
+def set_conv_last_products(conv_id: str, prods: list[dict[str, Any]]) -> None:
     cache = _load_cache()
     if "last_products" not in cache:
         cache["last_products"] = {}

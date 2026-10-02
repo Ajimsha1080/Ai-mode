@@ -102,7 +102,7 @@ async def run_massive_multitenancy_test():
         t3 = TENANT_PROFILES[2]
         t3_prods = await repo.get_all_products(workspace_id=t3["id"])
         t3_target = t3_prods[0]
-        initial_stock = t3_target.stock
+        initial_stock = t3_target.total_inventory
 
         order_3 = await repo.create_order_transaction(
             workspace_id=t3["id"],
@@ -114,14 +114,14 @@ async def run_massive_multitenancy_test():
 
         # Check stock decremented for Tenant 3 only
         updated_t3 = (await repo.get_all_products(workspace_id=t3["id"]))[0]
-        assert updated_t3.stock == initial_stock - 4, "Stock deduction failed for Tenant 3"
-        print(f"  [PASS] Tenant 3 ({t3['id']}) order {order_3.id} placed. Stock atomically reduced {initial_stock} -> {updated_t3.stock}.")
+        assert updated_t3.total_inventory == initial_stock - 4, "Stock deduction failed for Tenant 3"
+        print(f"  [PASS] Tenant 3 ({t3['id']}) order {order_3.id} placed. Stock atomically reduced {initial_stock} -> {updated_t3.total_inventory}.")
 
         # Check Tenant 7 (Titan Gaming) stock is UNTOUCHED
         t7 = TENANT_PROFILES[6]
         t7_prod = (await repo.get_all_products(workspace_id=t7["id"]))[0]
-        assert t7_prod.stock == 100, f"Tenant 7 stock corrupted by Tenant 3 order! Stock is {t7_prod.stock}"
-        print(f"  [PASS] Tenant 7 ({t7['id']}) inventory intact at {t7_prod.stock} units.")
+        assert t7_prod.total_inventory == 100, f"Tenant 7 stock corrupted by Tenant 3 order! Stock is {t7_prod.total_inventory}"
+        print(f"  [PASS] Tenant 7 ({t7['id']}) inventory intact at {t7_prod.total_inventory} units.")
 
     print("\n========================================================")
     print("SUCCESS: 10/10 TENANTS VERIFIED WITH 100% STRICT DATA ISOLATION (ZERO LEAKS)")

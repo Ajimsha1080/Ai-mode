@@ -4,6 +4,7 @@ import os
 import re
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from typing import Any
 
 logger = logging.getLogger("shopmate_llm")
@@ -56,7 +57,7 @@ class LLMClient:
         """
         import time
 
-        def try_with_retry(fn, name: str, max_retries: int = 2):
+        def try_with_retry(fn: Callable[[], dict[str, Any]], name: str, max_retries: int = 2) -> dict[str, Any]:
             last_ex: Exception = RuntimeError(f"All retries failed for {name}")
             for attempt in range(max_retries + 1):
                 try:

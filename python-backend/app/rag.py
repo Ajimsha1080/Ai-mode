@@ -7,7 +7,7 @@ import urllib.error
 import urllib.request
 from abc import ABC, abstractmethod
 from functools import lru_cache
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import select
 
@@ -115,7 +115,7 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-            return data["data"][0]["embedding"]
+            return cast(list[float], data["data"][0]["embedding"])
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
         url = "https://api.openai.com/v1/embeddings"
@@ -134,7 +134,7 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
         )
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-            return [item["embedding"] for item in data["data"]]
+            return cast(list[list[float]], [item["embedding"] for item in data["data"]])
 
 
 class OllamaEmbeddingProvider(EmbeddingProvider):
@@ -163,7 +163,7 @@ class OllamaEmbeddingProvider(EmbeddingProvider):
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-            return data.get("embedding", [0.0] * self._dim)
+            return cast(list[float], data.get("embedding", [0.0] * self._dim))
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
         return [self.embed_text(t) for t in texts]

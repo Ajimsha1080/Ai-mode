@@ -78,7 +78,8 @@ class DatabaseRepository:
             workspace_id=workspace_id,
             title=title,
             price=price,
-            stock=stock,
+            total_inventory=stock,
+            in_stock=(stock > 0),
             category=category,
             description=description
         )
@@ -130,6 +131,7 @@ class DatabaseRepository:
             order = OrderModel(
                 id=f"ord_{uuid.uuid4().hex[:12]}",
                 workspace_id=workspace_id,
+                order_number=f"#{uuid.uuid4().hex[:6].upper()}",
                 customer_email=customer_email,
                 total_amount=total_amount,
                 items_json=items,
@@ -189,6 +191,7 @@ class DatabaseRepository:
 
         doc = KnowledgeDocModel(
             id=f"doc_{uuid.uuid4().hex[:10]}",
+            workspace_id=workspace_id,
             source_id=source.id,
             title=title,
             content=content
@@ -199,6 +202,7 @@ class DatabaseRepository:
         for idx, chk in enumerate(chunks):
             c_model = KnowledgeChunkModel(
                 id=f"chk_{uuid.uuid4().hex[:10]}",
+                workspace_id=workspace_id,
                 doc_id=doc.id,
                 chunk_index=idx,
                 text=chk.get("text", ""),
